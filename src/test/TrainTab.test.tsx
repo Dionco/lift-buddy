@@ -107,10 +107,11 @@ describe('TrainTab', () => {
     expect(screen.getByRole('button', { name: /test program/i })).toBeInTheDocument();
   });
 
-  it('renders the week and day label', () => {
+  it('renders the week and day label in the card header', () => {
     renderTab();
-    expect(screen.getByText(/week 2/i)).toBeInTheDocument();
-    expect(screen.getByText(/day 1 — squat/i)).toBeInTheDocument();
+    // Find the span label outside of any button — the CTA button also contains "Week 2" but as part of a longer string
+    const headerLabel = screen.getByText('Week 2 · Day 1 — Squat');
+    expect(headerLabel.tagName).toBe('SPAN');
   });
 
   // --- Session card: exercise table ---
@@ -126,7 +127,7 @@ describe('TrainTab', () => {
   it('renders a row for each exercise with name, sets, reps', () => {
     renderTab();
     expect(screen.getByText('Squat')).toBeInTheDocument();
-    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getAllByText('5')).toHaveLength(2); // 5 sets and 5 reps for Squat
     expect(screen.getByText('Leg Press')).toBeInTheDocument();
     expect(screen.getByText('10-12')).toBeInTheDocument();
   });

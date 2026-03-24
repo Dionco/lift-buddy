@@ -1,6 +1,6 @@
 import { useTrainingStore } from '@/store/useTrainingStore';
 import { ExerciseLog, SetLog } from '@/types/training';
-import { Play, Zap, BookOpen, ChevronRight } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 
 interface TrainTabProps {
   onStartEmpty: () => void;
@@ -14,7 +14,7 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
   const currentDay = currentBlock?.days[program.currentDayIndex];
 
   const handleStartToday = () => {
-    if (!currentDay) return;
+    if (!currentBlock || !currentDay) return;
     const exercises: ExerciseLog[] = currentDay.exercises.map((pe) => {
       const sets: SetLog[] = Array.from({ length: pe.prescription.sets }, (_, i) => ({
         id: `preset-${Date.now()}-${i}`,
@@ -34,50 +34,76 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
     <div className="flex flex-col gap-4 p-5 pb-24">
       <h1 className="text-2xl font-bold tracking-tight text-foreground">Train</h1>
 
-      <button
-        onClick={onStartEmpty}
-        className="flex min-h-[72px] items-center gap-4 rounded-xl border border-border bg-card p-5 shadow-sm active:scale-[0.98] transition-transform"
-      >
-        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-          <Play className="h-6 w-6 text-primary" />
-        </div>
-        <div className="flex-1 text-left">
-          <p className="text-base font-semibold text-foreground">Start Empty Workout</p>
-          <p className="text-sm text-muted-foreground">Begin with a blank session</p>
-        </div>
-        <ChevronRight className="h-5 w-5 text-muted-foreground" />
-      </button>
-
-      {currentDay && (
-        <button
-          onClick={handleStartToday}
-          className="flex min-h-[72px] items-center gap-4 rounded-xl border border-primary/20 bg-primary/5 p-5 shadow-sm active:scale-[0.98] transition-transform"
-        >
-          <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/15">
-            <Zap className="h-6 w-6 text-primary" />
-          </div>
-          <div className="flex-1 text-left">
-            <p className="text-base font-semibold text-foreground">Today's Session</p>
-            <p className="text-sm text-muted-foreground">
+      {currentBlock && currentDay && (
+        <div className="rounded-xl border border-border bg-card shadow-sm p-4">
+          {/* Header row */}
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={onViewProgram}
+              className="flex items-center gap-0.5 flex-1 min-w-0 min-h-[44px] text-sm font-medium text-primary"
+            >
+              <span className="truncate">{program.name}</span>
+              <ChevronRight className="h-4 w-4 flex-shrink-0 text-primary" />
+            </button>
+            <span className="flex-shrink-0 text-sm text-muted-foreground">
               Week {currentBlock.weekNumber} · {currentDay.name}
-            </p>
+            </span>
           </div>
-          <ChevronRight className="h-5 w-5 text-muted-foreground" />
-        </button>
+
+          {/* Divider */}
+          <div className="border-t border-border my-3" />
+
+          {/* Column headers */}
+          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 text-xs text-muted-foreground pb-1">
+            <span className="text-left">Exercise</span>
+            <span className="text-center w-10">Sets</span>
+            <span className="text-center w-10">Reps</span>
+            <span className="text-center w-10">RPE</span>
+          </div>
+          {/* Data rows */}
+          <div className="divide-y divide-border">
+            {currentDay.exercises.map((pe) => (
+              <div
+                key={pe.exercise.id}
+                className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 py-2 items-center"
+              >
+                <span className="text-sm font-medium text-foreground text-left">
+                  {pe.exercise.name}
+                </span>
+                <span className="text-sm text-foreground text-center w-10">
+                  {pe.prescription.sets}
+                </span>
+                <span className="text-sm text-foreground text-center w-10">
+                  {pe.prescription.reps}
+                </span>
+                <span className="text-sm text-foreground text-center w-10">
+                  {pe.prescription.rpeTarget ?? '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* CTA button */}
+          <div className="border-t border-border mt-3 pt-3">
+            <button
+              type="button"
+              onClick={handleStartToday}
+              className="bg-primary text-primary-foreground rounded-lg w-full min-h-[52px] font-semibold whitespace-normal text-center active:scale-[0.98] transition-transform"
+            >
+              Start Week {currentBlock.weekNumber} · {currentDay.name}
+            </button>
+          </div>
+        </div>
       )}
 
+      {/* Start Empty Workout */}
       <button
-        onClick={onViewProgram}
-        className="flex min-h-[72px] items-center gap-4 rounded-xl border border-border bg-card p-5 shadow-sm active:scale-[0.98] transition-transform"
+        type="button"
+        onClick={onStartEmpty}
+        className="w-full rounded-xl border border-border bg-background min-h-[52px] text-sm font-medium text-foreground active:scale-[0.98] transition-transform"
       >
-        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-secondary">
-          <BookOpen className="h-6 w-6 text-secondary-foreground" />
-        </div>
-        <div className="flex-1 text-left">
-          <p className="text-base font-semibold text-foreground">View Program</p>
-          <p className="text-sm text-muted-foreground">{program.name}</p>
-        </div>
-        <ChevronRight className="h-5 w-5 text-muted-foreground" />
+        Start Empty Workout
       </button>
     </div>
   );
