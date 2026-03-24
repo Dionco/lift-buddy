@@ -7,65 +7,107 @@
 
 ## Overview
 
-Replace the current Train tab (three generic list-item cards) with a focused, information-rich layout centred on the upcoming session. Inspired by the reference app (Hevy-style), the redesigned tab prioritises getting the user into their programmed session with full context in one glance.
+Replace the current Train tab (three generic list-item cards) with a focused layout centred on the upcoming session. The redesigned tab prioritises getting the user into their programmed session with full context in one glance.
 
 ---
 
 ## Layout
 
-Two elements, top to bottom, inside the existing `p-5 pb-24` scroll container:
+Outer container: existing `flex flex-col gap-4 p-5 pb-24`. Three elements, top to bottom:
 
-1. **Session card** — the primary element; shows today's programmed session
-2. **Start Empty Workout button** — full-width outline button directly below the card
+1. `h1` heading — "Train" (unchanged)
+2. **Session card** — renders only when both `currentBlock` and `currentDay` are defined (see No-Program State)
+3. **Start Empty Workout button** — always present
 
-The "Train" heading (`h1`) stays at the top as-is. No other elements.
+The `gap-4` spacing is preserved between all elements.
+
+---
+
+## No-Program State
+
+When `currentBlock` or `currentDay` is undefined, the session card is not rendered. Only the "Train" heading and the Start Empty Workout button appear. No placeholder text or empty-state illustration.
 
 ---
 
 ## Session Card
 
-A single rounded bordered card (`rounded-xl border border-border bg-card shadow-sm`).
+Guard: `{currentBlock && currentDay && <SessionCard />}` — use both to satisfy TypeScript's type narrower.
 
-### Header row
+Card: `rounded-xl border border-border bg-card shadow-sm p-4`
 
-Two columns, space-between, inside the card:
+If `currentDay.exercises` is an empty array, the card still renders (empty table body, CTA still functional). No fallback message.
 
-- **Left:** Program name rendered as a tappable text link with a small external-link icon (`ExternalLink` from lucide-react). Tapping calls `onViewProgram`. Style: `text-sm font-medium text-primary`.
-- **Right:** Muted week/day label — `Week {n} · {dayName}` — in `text-sm text-muted-foreground`.
+### Header Row
 
-### Exercise table
+`flex items-center justify-between gap-2`
 
-Rendered below a thin divider line inside the card.
+**Left — program name link** (`flex items-center gap-0.5 flex-1 min-w-0 min-h-[44px]`):
+- Element: `<button type="button">` — not `<a>` or `<div>`, ensures keyboard/focus behaviour
+- Renders `program.name` (e.g. `"4-Week Powerlifting Block"`)
+- `onClick` calls `onViewProgram`
+- Text: `text-sm font-medium text-primary truncate`
+- Icon: `ChevronRight` from lucide-react (`h-4 w-4 flex-shrink-0 text-primary`)
+- Use `flex` (not `inline-flex`) so `flex-1` participates correctly in the parent layout
 
-**Column headers** (small, muted):
+**Right — week/day label** (`flex-shrink-0`):
+- Text: `` `Week ${currentBlock.weekNumber} · ${currentDay.name}` ``
+- `currentBlock.weekNumber` is type `number`; `currentDay.name` is type `string`
+- Style: `text-sm text-muted-foreground`
+- Never truncated; program name truncates first when space is tight
 
-| Exercise | Sets | Reps | RPE |
-|----------|------|------|-----|
+---
 
-**Exercise rows** — one per `currentDay.exercises`:
+### Divider
 
-- **Exercise:** `exercise.name` in `text-sm font-medium text-foreground`
-- **Sets:** `prescription.sets` (number)
-- **Reps:** `prescription.reps` (string, e.g. `"5"`, `"8-12"`)
-- **RPE:** `prescription.rpeTarget` formatted as a number (e.g. `8`, `7.5`), or `—` if undefined
+`<div className="border-t border-border my-3" />` between header and exercise table.
 
-Light horizontal dividers between rows (`divide-y divide-border`).
+---
 
-### CTA button
+### Exercise Table
 
-Full-width, inside the card at the bottom, separated by a thin divider:
+Two sibling `<div>` groups (not `<table>`):
 
-- Style: `bg-primary text-primary-foreground rounded-lg w-full`
-- Label: `Start Week {n} · {dayName}`
-- Action: existing `handleStartToday` logic (unchanged)
+**Column header row** (`grid grid-cols-[1fr_auto_auto_auto] gap-x-3 text-xs text-muted-foreground pb-1`):
+
+Four cells, one per column, each aligned over its data column:
+- `Exercise` — `text-left`
+- `Sets` — `text-center w-10`
+- `Reps` — `text-center w-10`
+- `RPE` — `text-center w-10`
+
+**Data rows container** (`divide-y divide-border`):
+
+Each row maps over `currentDay.exercises` (type `ProgramExercise[]`):
+
+`grid grid-cols-[1fr_auto_auto_auto] gap-x-3 py-2 items-center`
+
+| Column | Source | Style |
+|--------|--------|-------|
+| Exercise | `pe.exercise.name` (string) | `text-sm font-medium text-foreground text-left` |
+| Sets | `pe.prescription.sets` (number) | `text-sm text-foreground text-center w-10` |
+| Reps | `pe.prescription.reps` (string) | `text-sm text-foreground text-center w-10` |
+| RPE | `pe.prescription.rpeTarget` (number \| undefined) → render as-is or `—` | `text-sm text-foreground text-center w-10` |
+
+RPE decimals rendered as-is (e.g. `7.5`, `8`). No max height; the outer scroll container handles overflow.
+
+---
+
+### CTA Button
+
+`<div className="border-t border-border mt-3 pt-3">`
+
+- Style: `bg-primary text-primary-foreground rounded-lg w-full min-h-[52px] font-semibold whitespace-normal text-center active:scale-[0.98] transition-transform`
+- Label: `` `Start Week ${currentBlock.weekNumber} · ${currentDay.name}` ``
+- Label is allowed to wrap on narrow screens
+- Action: calls `handleStartToday`, which is a local wrapper that builds the `ExerciseLog[]` array from `currentDay.exercises` and calls `onStartToday(exercises, name, currentDay.id)` where `name` = `` `Week ${currentBlock.weekNumber} · ${currentDay.name}` ``. This function is identical to the existing implementation — do not change its logic.
 
 ---
 
 ## Start Empty Workout Button
 
-Below the card, full-width outline button:
+Spacing from session card handled by parent `gap-4`.
 
-- Style: `variant="outline"` (shadcn Button) or equivalent `border border-border rounded-xl`
+- Style: `w-full rounded-xl border border-border bg-background min-h-[52px] text-sm font-medium text-foreground active:scale-[0.98] transition-transform`
 - Label: `Start Empty Workout`
 - Action: existing `onStartEmpty` (unchanged)
 
@@ -73,26 +115,34 @@ Below the card, full-width outline button:
 
 ## Data Sources
 
-All data comes from existing store state — no new store fields required:
+All from existing store state — no new store fields required:
 
-- `program.name` — program name in card header
-- `currentBlock.weekNumber` — week number
-- `currentDay.name` — day name
-- `currentDay.exercises` — array of `ProgramExercise` for the table rows
-- `pe.exercise.name`, `pe.prescription.sets`, `pe.prescription.reps`, `pe.prescription.rpeTarget` — table cell values
+| Token | Type | Source |
+|-------|------|--------|
+| Program name | `string` | `program.name` |
+| Week number | `number` | `currentBlock.weekNumber` |
+| Day name | `string` | `currentDay.name` |
+| Exercises | `ProgramExercise[]` | `currentDay.exercises` |
+| Exercise name | `string` | `pe.exercise.name` |
+| Sets | `number` | `pe.prescription.sets` |
+| Reps | `string` | `pe.prescription.reps` |
+| RPE target | `number \| undefined` | `pe.prescription.rpeTarget` |
+| Day ID | `string` | `currentDay.id` (used in `onStartToday` call) |
 
 ---
 
 ## What Is Removed
 
 - "Today's Session" card (replaced by the new session card)
-- "View Program" standalone card (replaced by tappable program name in card header)
+- "View Program" standalone card (replaced by tappable `program.name` in card header)
+- "Start Empty Workout" card (replaced by the outline button below)
+- Icon imports `Play`, `Zap`, `BookOpen` — no longer used; remove from import statement
+- New import needed: `ChevronRight` from `lucide-react`
 
 ---
 
 ## Constraints
 
-- Light mode only; no dark mode variants needed
-- 44px+ touch targets on the CTA and empty workout button
-- No new dependencies; uses existing shadcn/ui primitives and lucide-react icons
-- No new store state or data model changes
+- Light mode only; no dark mode variants
+- 44px+ touch targets: CTA (`min-h-[52px]`), empty workout button (`min-h-[52px]`), program name link (`min-h-[44px]` via `flex` wrapper)
+- No new dependencies; no new store state or data model changes
