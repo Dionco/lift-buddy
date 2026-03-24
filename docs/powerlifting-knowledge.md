@@ -18,6 +18,8 @@ Evidence-based powerlifting principles for use as development context and as a f
 | 7   | 3 | Could get 3 more reps |
 | 6   | 4+ | Relatively easy |
 
+Values below RPE 6 are not used in this app — all logged sets are assumed to be at least moderately challenging.
+
 **Key principles:**
 - RPE is subjective and requires calibration — newer lifters tend to underestimate (think they're at RPE 8 when closer to 9.5).
 - RPE is more useful for autoregulation than fixed percentage loading, especially for intermediate/advanced lifters.
@@ -113,6 +115,8 @@ The app collects sleep (4–10 hrs), energy (1–5), and soreness (1–5). Sugge
 | Energy | ≤2/5 | Reduce total volume 20–30%, avoid PRs |
 | Soreness | ≥4/5 in trained muscle | Delay training that muscle, or significantly reduce volume |
 
+Note: the app collects sleep down to 4 hrs minimum — values of 4–5 hrs represent the extreme low end and should always trigger low-readiness flags.
+
 These are guidelines, not hard rules. Experienced lifters often train through moderate fatigue — the SRA cycle partially depends on training under some fatigue to drive adaptation.
 
 **App relevance:** `ReadinessCheckIn` type stores sleep/energy/soreness. Currently stored per session but not used to auto-adjust programming. Future features could use this data to flag fatigue trends or suggest deloads.
@@ -125,7 +129,7 @@ Mike Israetel's volume landmark model is the dominant framework for evidence-bas
 
 | Landmark | Definition | Typical weekly sets (per muscle group) |
 |----------|-----------|---------------------------------------|
-| **MEV** (Minimum Effective Volume) | Minimum to make progress / maintain | 4–8 sets |
+| **MEV** (Minimum Effective Volume) | Minimum to make progress / maintain | 6–10 sets (lower-demand groups such as arms and glutes sit at the lower end; compound-dominant groups such as quads, chest, and back sit at the higher end) |
 | **MAV** (Maximum Adaptive Volume) | Optimal range for most progress | 12–20 sets |
 | **MRV** (Maximum Recoverable Volume) | Maximum before recovery is compromised | 20–30+ sets (highly individual) |
 
@@ -148,8 +152,10 @@ Mike Israetel's volume landmark model is the dominant framework for evidence-bas
 - Shoulders: MEV ~6, MAV ~12–20
 - Biceps/Triceps: MEV ~6, MAV ~10–16
 - Glutes: MEV ~4, MAV ~8–16
+- Core: MEV ~4, MAV ~8–12 (note: volume landmarks are not well-established for core; these are approximate)
+- Posterior Chain: MEV ~4, MAV ~8–14 (encompasses hamstrings/glutes/erectors when trained as a unit; track individual muscles when possible)
 
-**App relevance:** The Progress tab's Weekly Volume Dashboard tracks sets per muscle group. Color coding (grey/green/amber) should map to below MEV / within MAV / approaching MRV respectively. The `MuscleGroup` type in `training.ts` defines the tracked groups.
+**App relevance:** The Progress tab's Weekly Volume Dashboard tracks sets per muscle group. Color coding (grey/green/amber) is planned to map to below MEV / within MAV / approaching MRV respectively. (not yet implemented — this is the intended design) The `MuscleGroup` type in `training.ts` defines the tracked groups.
 
 ---
 
@@ -180,6 +186,8 @@ The dominant approach in modern powerlifting. Training is divided into distinct 
 The sample program uses `ProgramBlock` objects with `weekNumber` and `focus` fields. Each block maps to a phase:
 - Blocks with focus containing "Conditioning" or high rep prescriptions → Accumulation phase.
 - Blocks with focus containing "Strength" or lower rep ranges → Intensification/Realization phase.
+
+This is an informal naming convention used in the sample data, not a type-level contract — the `focus` field is a free string with no enum constraint.
 
 **App relevance:** `ProgramBlock`, `ProgramDay`, `ProgramExercise`, `SetPrescription` in `training.ts`. The current block index and day index are tracked in the `Program` type and updated via `updateProgramProgress`.
 
