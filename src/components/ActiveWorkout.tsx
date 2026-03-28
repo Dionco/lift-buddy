@@ -5,6 +5,9 @@ import { useElapsedTime } from "@/hooks/useElapsedTime";
 import { Exercise as TrainingExercise } from "@/types/training";
 import { AddExerciseSheet } from "./AddExerciseSheet";
 
+let _exerciseIdCounter = Date.now();
+const nextExerciseId = () => ++_exerciseIdCounter;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface WorkoutSet {
@@ -547,13 +550,14 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
   };
 
   const handleAddExercises = (newExercises: TrainingExercise[]) => {
+    if (!activeSession) return;
     newExercises.forEach((ex) => {
       addExerciseToStore({ exercise: ex, sets: [] });
     });
     setExercises((prev) => [
       ...prev,
-      ...newExercises.map((ex, i) => ({
-        id: Date.now() + i,
+      ...newExercises.map((ex) => ({
+        id: nextExerciseId(),
         name: ex.name,
         sets: [],
       })),
