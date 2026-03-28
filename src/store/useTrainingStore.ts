@@ -18,6 +18,7 @@ interface TrainingState {
   removeSet: (exerciseIndex: number, setIndex: number) => void;
   addSetToExercise: (exerciseIndex: number) => void;
   finishSession: (note?: string) => void;
+  cancelSession: () => void;
   setRestTimerDuration: (seconds: number) => void;
   updateProgramProgress: (blockIndex: number, dayIndex: number) => void;
 }
@@ -125,6 +126,8 @@ export const useTrainingStore = create<TrainingState>()(
           activeSession: null,
         });
       },
+
+      cancelSession: () => set({ activeSession: null }),
 
       setRestTimerDuration: (seconds) => set({ restTimerDuration: seconds }),
 

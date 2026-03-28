@@ -7,7 +7,8 @@ import { ProgressTab } from '@/components/ProgressTab';
 import { HistoryTab } from '@/components/HistoryTab';
 import { ProgramOverview } from '@/components/ProgramOverview';
 import { ReadinessCheck } from '@/components/ReadinessCheck';
-import { ActiveWorkout } from '@/components/ActiveWorkout';
+import { WorkoutSheet } from '@/components/WorkoutSheet';
+import { WorkoutMiniBar } from '@/components/WorkoutMiniBar';
 import { SessionSummary } from '@/components/SessionSummary';
 
 type Screen = 'tabs' | 'program' | 'readiness' | 'workout' | 'summary';
@@ -15,7 +16,8 @@ type Screen = 'tabs' | 'program' | 'readiness' | 'workout' | 'summary';
 const Index = () => {
   const [activeTab, setActiveTab] = useState<'train' | 'progress' | 'history'>('train');
   const [screen, setScreen] = useState<Screen>('tabs');
-  const { startSession, setReadiness, activeSession, finishSession } = useTrainingStore();
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const { startSession, setReadiness, activeSession, finishSession, cancelSession } = useTrainingStore();
   const [pendingStart, setPendingStart] = useState<{
     name?: string;
     dayId?: string;
@@ -32,16 +34,25 @@ const Index = () => {
     setReadiness(readiness);
     setPendingStart(null);
     setScreen('workout');
+    setSheetOpen(true);
   };
 
   const handleReadinessSkip = () => {
     startSession(pendingStart?.name, pendingStart?.dayId, pendingStart?.exercises);
     setPendingStart(null);
     setScreen('workout');
+    setSheetOpen(true);
   };
 
   const handleFinish = () => {
+    setSheetOpen(false);
     setScreen('summary');
+  };
+
+  const handleCancelWorkout = () => {
+    cancelSession();
+    setSheetOpen(false);
+    setScreen('tabs');
   };
 
   const handleSaveSummary = (note?: string) => {
@@ -51,10 +62,6 @@ const Index = () => {
 
   if (screen === 'readiness') {
     return <ReadinessCheck onSubmit={handleReadinessSubmit} onSkip={handleReadinessSkip} />;
-  }
-
-  if (screen === 'workout' && activeSession) {
-    return <ActiveWorkout onFinish={handleFinish} onCancel={() => setScreen('tabs')} />;
   }
 
   if (screen === 'summary' && activeSession) {
@@ -82,6 +89,22 @@ const Index = () => {
       {activeTab === 'progress' && <ProgressTab />}
       {activeTab === 'history' && <HistoryTab />}
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
+      {screen === 'workout' && activeSession && (
+        <WorkoutMiniBar
+          workoutName={activeSession.workoutName}
+          startTime={activeSession.startTime}
+          onResume={() => setSheetOpen(true)}
+          onCancel={handleCancelWorkout}
+        />
+      )}
+      {screen === 'workout' && activeSession && (
+        <WorkoutSheet
+          open={sheetOpen}
+          onCollapse={() => setSheetOpen(false)}
+          onFinish={handleFinish}
+          onCancel={handleCancelWorkout}
+        />
+      )}
     </div>
   );
 };
