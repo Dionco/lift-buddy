@@ -2,6 +2,8 @@ import { useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useTrainingStore } from "@/store/useTrainingStore";
 import { useElapsedTime } from "@/hooks/useElapsedTime";
+import { Exercise as TrainingExercise } from "@/types/training";
+import { AddExerciseSheet } from "./AddExerciseSheet";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -436,8 +438,11 @@ interface ActiveWorkoutProps {
 
 export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
   const activeSession = useTrainingStore((s) => s.activeSession);
+  const sessions = useTrainingStore((s) => s.sessions);
+  const addExerciseToStore = useTrainingStore((s) => s.addExercise);
   const [exercises, setExercises] = useState<Exercise[]>(INITIAL_EXERCISES);
   const [activeInput, setActiveInput] = useState<ActiveInput | null>(null);
+  const [showAddExercise, setShowAddExercise] = useState(false);
 
   const formattedTime = useElapsedTime(activeSession?.startTime ?? Date.now());
 
@@ -539,6 +544,21 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
   const handleRPE = () => {
     // Hook into your RPE flow here
     console.log("RPE tapped for", activeInput);
+  };
+
+  const handleAddExercises = (newExercises: TrainingExercise[]) => {
+    newExercises.forEach((ex) => {
+      addExerciseToStore({ exercise: ex, sets: [] });
+    });
+    setExercises((prev) => [
+      ...prev,
+      ...newExercises.map((ex, i) => ({
+        id: Date.now() + i,
+        name: ex.name,
+        sets: [],
+      })),
+    ]);
+    setShowAddExercise(false);
   };
 
   return (
@@ -682,6 +702,7 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
             cursor: "pointer",
             flexShrink: 0,   // ← ADD THIS
           }}
+          onClick={() => setShowAddExercise(true)}
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M8 2v12M2 8h12" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
@@ -702,6 +723,12 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
         />,
         document.body,
       )}
+      <AddExerciseSheet
+        visible={showAddExercise}
+        sessions={sessions}
+        onClose={() => setShowAddExercise(false)}
+        onAdd={handleAddExercises}
+      />
     </div>
   );
 }
