@@ -140,4 +140,17 @@ describe('AddExerciseSheet', () => {
     const dashes = screen.getAllByText('—');
     expect(dashes.length).toBeGreaterThan(0);
   });
+
+  it('shows "Results" label when search query is active', async () => {
+    renderSheet();
+    await userEvent.type(screen.getByPlaceholderText('Search exercise name'), 'squat');
+    expect(screen.getByText('Results')).toBeInTheDocument();
+    expect(screen.queryByText('Recent Exercises')).not.toBeInTheDocument();
+  });
+
+  it('shows empty state message when no exercises match the search', async () => {
+    renderSheet();
+    await userEvent.type(screen.getByPlaceholderText('Search exercise name'), 'xyznotanexercise');
+    expect(screen.getByText('No exercises found')).toBeInTheDocument();
+  });
 });

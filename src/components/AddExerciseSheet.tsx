@@ -246,7 +246,7 @@ export function AddExerciseSheet({ visible, sessions, onClose, onAdd }: AddExerc
               padding: "8px 0 4px",
             }}
           >
-            Recent Exercises
+            {query || muscleFilter ? "Results" : "Recent Exercises"}
           </div>
 
           {filteredExercises.map((ex) => {
@@ -309,6 +309,19 @@ export function AddExerciseSheet({ visible, sessions, onClose, onAdd }: AddExerc
               </div>
             );
           })}
+
+          {filteredExercises.length === 0 && (
+            <div
+              style={{
+                padding: "24px 0",
+                textAlign: "center",
+                fontSize: 14,
+                color: "#888780",
+              }}
+            >
+              No exercises found
+            </div>
+          )}
         </div>
 
         {/* Footer */}
