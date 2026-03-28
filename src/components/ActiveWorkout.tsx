@@ -127,11 +127,13 @@ interface ExerciseCardProps {
 function ExerciseCard({ exercise, activeInput, onInputFocus, onToggleDone, onAddSet }: ExerciseCardProps) {
   return (
     <div
+      // ExerciseCard root div — add flexShrink: 0
       style={{
         background: "#FFFFFF",
         border: "0.5px solid #D3D1C7",
         borderRadius: 12,
         overflow: "hidden",
+        flexShrink: 0,   // ← ADD THIS
       }}
     >
       {/* Card header */}
@@ -678,6 +680,7 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
             fontWeight: 500,
             color: "white",
             cursor: "pointer",
+            flexShrink: 0,   // ← ADD THIS
           }}
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
