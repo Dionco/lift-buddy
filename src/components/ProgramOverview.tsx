@@ -43,42 +43,57 @@ export function ProgramOverview({ onBack }: ProgramOverviewProps) {
                     isCurrent ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'
                   )}
                 >
-                  W{block.weekNumber}
+                  B{blockIdx + 1}
                 </div>
                 <div className="flex-1">
                   <p className="font-semibold text-foreground">{block.name}</p>
-                  <p className="text-sm text-muted-foreground">{block.focus} · {block.days.length} days</p>
+                  <p className="text-sm text-muted-foreground">
+                    {block.focus} · {block.weeks.length} {block.weeks.length === 1 ? 'week' : 'weeks'}
+                  </p>
                 </div>
                 {isExpanded ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
               </button>
 
               {isExpanded && (
-                <div className="mt-2 ml-7 flex flex-col gap-2 border-l-2 border-border pl-5">
-                  {block.days.map((day, dayIdx) => {
-                    const isDayActive = isCurrent && dayIdx === program.currentDayIndex;
+                <div className="mt-2 ml-7 flex flex-col gap-3 border-l-2 border-border pl-5">
+                  {block.weeks.map((week, weekIdx) => {
+                    const isCurrentWeek = isCurrent && weekIdx === program.currentWeekIndex;
                     return (
-                      <div
-                        key={day.id}
-                        className={cn(
-                          'rounded-lg border p-4',
-                          isDayActive ? 'border-primary/20 bg-primary/5' : 'border-border bg-card'
-                        )}
-                      >
-                        <p className={cn('font-medium mb-2', isDayActive && 'text-primary')}>
-                          {day.name}
-                          {isDayActive && <span className="ml-2 text-xs bg-primary text-primary-foreground px-2 py-0.5 rounded-full">Next</span>}
+                      <div key={week.id} className="flex flex-col gap-2">
+                        <p className={cn(
+                          'text-xs font-bold uppercase tracking-widest',
+                          isCurrentWeek ? 'text-primary' : 'text-muted-foreground'
+                        )}>
+                          Week {week.weekNumber}
                         </p>
-                        <div className="flex flex-col gap-1">
-                          {day.exercises.map((pe) => (
-                            <div key={pe.exercise.id} className="flex items-center justify-between text-sm">
-                              <span className="text-foreground">{pe.exercise.name}</span>
-                              <span className="text-muted-foreground">
-                                {pe.prescription.sets}×{pe.prescription.reps}
-                                {pe.prescription.rpeTarget && ` @${pe.prescription.rpeTarget}`}
-                              </span>
+                        {week.days.map((day, dayIdx) => {
+                          const isDayActive = isCurrentWeek && dayIdx === program.currentDayIndex;
+                          return (
+                            <div
+                              key={day.id}
+                              className={cn(
+                                'rounded-lg border p-4',
+                                isDayActive ? 'border-primary/20 bg-primary/5' : 'border-border bg-card'
+                              )}
+                            >
+                              <p className={cn('font-medium mb-2', isDayActive && 'text-primary')}>
+                                {day.name}
+                                {isDayActive && <span className="ml-2 text-xs bg-primary text-primary-foreground px-2 py-0.5 rounded-full">Next</span>}
+                              </p>
+                              <div className="flex flex-col gap-1">
+                                {day.exercises.map((pe) => (
+                                  <div key={pe.exercise.id} className="flex items-center justify-between text-sm">
+                                    <span className="text-foreground">{pe.exercise.name}</span>
+                                    <span className="text-muted-foreground">
+                                      {pe.prescription.sets}×{pe.prescription.reps}
+                                      {pe.prescription.rpeTarget && ` @${pe.prescription.rpeTarget}`}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
-                          ))}
-                        </div>
+                          );
+                        })}
                       </div>
                     );
                   })}

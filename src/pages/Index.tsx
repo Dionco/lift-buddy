@@ -17,7 +17,7 @@ const Index = () => {
   const [activeTab, setActiveTab] = useState<'train' | 'progress' | 'history'>('train');
   const [screen, setScreen] = useState<Screen>('tabs');
   const [sheetOpen, setSheetOpen] = useState(false);
-  const { startSession, setReadiness, activeSession, finishSession, cancelSession } = useTrainingStore();
+  const { startSession, setReadiness, activeSession, cancelSession } = useTrainingStore();
   const [pendingStart, setPendingStart] = useState<{
     name?: string;
     dayId?: string;
@@ -55,8 +55,7 @@ const Index = () => {
     setScreen('tabs');
   };
 
-  const handleSaveSummary = (note?: string) => {
-    finishSession(note);
+  const handleSummaryClose = () => {
     setScreen('tabs');
   };
 
@@ -68,7 +67,7 @@ const Index = () => {
     return (
       <SessionSummary
         session={{ ...activeSession, endTime: Date.now() }}
-        onSave={handleSaveSummary}
+        onClose={handleSummaryClose}
       />
     );
   }

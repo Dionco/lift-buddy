@@ -40,10 +40,11 @@ function getLastTopSet(sessions: Session[], exerciseId: string) {
 export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTabProps) {
   const { program, sessions } = useTrainingStore();
   const currentBlock = program.blocks[program.currentBlockIndex];
-  const currentDay = currentBlock?.days[program.currentDayIndex];
+  const currentWeek = currentBlock?.weeks[program.currentWeekIndex];
+  const currentDay = currentWeek?.days[program.currentDayIndex];
 
   const handleStartToday = () => {
-    if (!currentBlock || !currentDay) return;
+    if (!currentBlock || !currentWeek || !currentDay) return;
     const exercises: ExerciseLog[] = currentDay.exercises.map((pe) => {
       const sets: SetLog[] = Array.from({ length: pe.prescription.sets }, (_, i) => ({
         id: `preset-${Date.now()}-${i}`,
@@ -55,7 +56,7 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
       }));
       return { exercise: pe.exercise, sets };
     });
-    const name = `Week ${currentBlock.weekNumber} · ${currentDay.name}`;
+    const name = `Week ${currentWeek.weekNumber} · ${currentDay.name}`;
     onStartToday(exercises, name, currentDay.id);
   };
 
@@ -98,13 +99,13 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
             ))}
           </div>
           <p className="text-[11px] font-medium text-muted-foreground">
-            Week {currentBlock.weekNumber} of {program.blocks.length} · {phaseLabel} Phase
+            Week {currentWeek?.weekNumber ?? 1} of {currentBlock.weeks.length} · {phaseLabel} Phase
           </p>
         </div>
       )}
 
       {/* Session card */}
-      {currentBlock && currentDay && (
+      {currentBlock && currentWeek && currentDay && (
         <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
 
           {/* Card header: session identity */}
@@ -112,7 +113,7 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                  Day {program.currentDayIndex + 1} of {currentBlock.days.length}
+                  Day {program.currentDayIndex + 1} of {currentWeek.days.length}
                 </p>
                 <h2 className="text-[1.1rem] font-bold text-foreground leading-snug mt-0.5 truncate">
                   {dayTitle}
@@ -133,7 +134,7 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
 
             {/* Day progress within block */}
             <div className="flex gap-1 mt-3">
-              {currentBlock.days.map((_, i) => (
+              {currentWeek.days.map((_, i) => (
                 <div
                   key={i}
                   className={`h-[2px] flex-1 rounded-full ${

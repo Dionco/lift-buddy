@@ -1,12 +1,42 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useTrainingStore } from "@/store/useTrainingStore";
 import { useElapsedTime } from "@/hooks/useElapsedTime";
-import { Exercise as TrainingExercise } from "@/types/training";
+import { Exercise as TrainingExercise, ExerciseLog, SetLog } from "@/types/training";
 import { AddExerciseSheet } from "./AddExerciseSheet";
 
 let _exerciseIdCounter = Date.now();
 const nextExerciseId = () => ++_exerciseIdCounter;
+
+/**
+ * Convert a store ExerciseLog (positional in activeSession.exercises) into the
+ * UI's local Exercise shape. `exId` is the array index — that's our stable handle
+ * back into the store for `updateSet` / `addSetToExercise` / etc.
+ *
+ * Per ADR-0006: the UI shows actual logged values. Reps starts blank, never
+ * defaulted from prescription. Weight starts blank too unless previously typed.
+ */
+function exerciseLogToLocal(log: ExerciseLog, exId: number): Exercise {
+  return {
+    id: exId,
+    name: log.exercise.name,
+    sets: log.sets.map((s, i) => ({
+      id: `${exId}-${i + 1}`,
+      weight: s.weight > 0 ? String(s.weight) : "",
+      reps: s.reps > 0 ? String(s.reps) : "",
+      prev: "—",
+      done: s.completed,
+      rpe: s.rpe,
+      programRPE: undefined,
+      target: undefined,
+    })),
+  };
+}
+
+function buildInitialExercises(activeSessionExercises: ExerciseLog[] | undefined): Exercise[] {
+  if (!activeSessionExercises || activeSessionExercises.length === 0) return [];
+  return activeSessionExercises.map(exerciseLogToLocal);
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -16,6 +46,11 @@ interface WorkoutSet {
   reps: string;
   prev: string;
   done: boolean;
+  rpe?: number;
+  /** RPE target prescribed by the program */
+  programRPE?: number;
+  /** Target weight × reps prescribed by the program, e.g. "100 × 5" */
+  target?: string;
 }
 
 interface Exercise {
@@ -29,29 +64,6 @@ interface ActiveInput {
   setId: string;
   field: "weight" | "reps";
 }
-
-// ─── Sample data ─────────────────────────────────────────────────────────────
-
-const INITIAL_EXERCISES: Exercise[] = [
-  {
-    id: 1,
-    name: "Squat (Paused)",
-    sets: [
-      { id: "1-1", weight: "100", reps: "5", prev: "100 kg × 5", done: false },
-      { id: "1-2", weight: "100", reps: "5", prev: "100 kg × 5", done: false },
-      { id: "1-3", weight: "100", reps: "6", prev: "100 kg × 6", done: false },
-    ],
-  },
-  {
-    id: 2,
-    name: "Lateral Raise (Dumbbell)",
-    sets: [
-      { id: "2-1", weight: "7", reps: "11", prev: "7 kg × 11", done: false },
-      { id: "2-2", weight: "7", reps: "12", prev: "7 kg × 12", done: false },
-      { id: "2-3", weight: "7", reps: "11", prev: "7 kg × 11", done: false },
-    ],
-  },
-];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -94,14 +106,16 @@ interface SetInputProps {
   placeholder: string;
   isActive: boolean;
   onClick: () => void;
+  rpe?: number;
 }
 
-function SetInput({ value, placeholder, isActive, onClick }: SetInputProps) {
+function SetInput({ value, placeholder, isActive, onClick, rpe }: SetInputProps) {
   return (
     <div
       data-set-input
       onClick={onClick}
       style={{
+        position: "relative",
         background: isActive ? "#EEEDFE" : "#F1EFE8",
         border: `0.5px solid ${isActive ? "#7F77DD" : "#D3D1C7"}`,
         borderRadius: 6,
@@ -117,6 +131,26 @@ function SetInput({ value, placeholder, isActive, onClick }: SetInputProps) {
       }}
     >
       {value || placeholder}
+      {rpe !== undefined && (
+        <span
+          style={{
+            position: "absolute",
+            top: -5,
+            right: -5,
+            background: "#7F77DD",
+            color: "white",
+            fontSize: 9,
+            fontWeight: 700,
+            lineHeight: 1,
+            padding: "2px 3px",
+            borderRadius: 4,
+            letterSpacing: "0.01em",
+            pointerEvents: "none",
+          }}
+        >
+          {rpe % 1 === 0 ? rpe : rpe}
+        </span>
+      )}
     </div>
   );
 }
@@ -127,18 +161,26 @@ interface ExerciseCardProps {
   onInputFocus: (exId: number, setId: string, field: "weight" | "reps") => void;
   onToggleDone: (exId: number, setId: string) => void;
   onAddSet: (exId: number) => void;
+  isFromProgram: boolean;
 }
 
-function ExerciseCard({ exercise, activeInput, onInputFocus, onToggleDone, onAddSet }: ExerciseCardProps) {
+function ExerciseCard({ exercise, activeInput, onInputFocus, onToggleDone, onAddSet, isFromProgram }: ExerciseCardProps) {
+  const [col2Mode, setCol2Mode] = useState<"rpe" | "prev">("rpe");
+
+  // Program layout: Set | RPE/Prev | Target | kg | Reps | ✓
+  // Free layout:    Set | Previous | kg | Reps | ✓
+  const grid = isFromProgram
+    ? "24px 1fr 1fr 56px 56px 28px"
+    : "28px 1fr 60px 60px 28px";
+
   return (
     <div
-      // ExerciseCard root div — add flexShrink: 0
       style={{
         background: "#FFFFFF",
         border: "0.5px solid #D3D1C7",
         borderRadius: 12,
         overflow: "hidden",
-        flexShrink: 0,   // ← ADD THIS
+        flexShrink: 0,
       }}
     >
       {/* Card header */}
@@ -190,22 +232,62 @@ function ExerciseCard({ exercise, activeInput, onInputFocus, onToggleDone, onAdd
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "28px 1fr 60px 60px 28px",
+          gridTemplateColumns: grid,
           gap: 6,
           padding: "6px 14px",
           alignItems: "center",
         }}
       >
-        {(["Set", "Previous", "kg", "Reps", ""] as const).map((label, i) => (
+        {/* Set */}
+        <span style={{ fontSize: 11, fontWeight: 500, color: "#888780", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+          Set
+        </span>
+
+        {isFromProgram ? (
+          <>
+            {/* Col 2: RPE/Prev toggle */}
+            <button
+              onClick={() => setCol2Mode((m) => (m === "rpe" ? "prev" : "rpe"))}
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 3,
+              }}
+            >
+              <span style={{ fontSize: 11, fontWeight: 500, color: "#7F77DD", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                {col2Mode === "rpe" ? "RPE" : "Prev"}
+              </span>
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path d="M1 3.5h8M1 6.5h8M3 1.5L1 3.5l2 2M7 4.5l2 2-2 2" stroke="#7F77DD" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            {/* Col 3: Target */}
+            <span style={{ fontSize: 11, fontWeight: 500, color: "#888780", textTransform: "uppercase", letterSpacing: "0.04em", textAlign: "center" }}>
+              Target
+            </span>
+          </>
+        ) : (
+          <span style={{ fontSize: 11, fontWeight: 500, color: "#888780", textTransform: "uppercase", letterSpacing: "0.04em", textAlign: "center" }}>
+            Previous
+          </span>
+        )}
+
+        {/* kg, Reps, empty */}
+        {(["kg", "Reps", ""] as const).map((label, i) => (
           <span
-            key={i}
+            key={label + i}
             style={{
               fontSize: 11,
               fontWeight: 500,
               color: "#888780",
               textTransform: "uppercase",
               letterSpacing: "0.04em",
-              textAlign: i === 0 || i === 4 ? "left" : "center",
+              textAlign: "center",
             }}
           >
             {label}
@@ -230,7 +312,7 @@ function ExerciseCard({ exercise, activeInput, onInputFocus, onToggleDone, onAdd
             key={set.id}
             style={{
               display: "grid",
-              gridTemplateColumns: "28px 1fr 60px 60px 28px",
+              gridTemplateColumns: grid,
               gap: 6,
               padding: "5px 14px",
               alignItems: "center",
@@ -241,25 +323,32 @@ function ExerciseCard({ exercise, activeInput, onInputFocus, onToggleDone, onAdd
               transition: "opacity 0.15s, background 0.15s",
             }}
           >
-            <span
-              style={{
-                fontSize: 13,
-                color: "#888780",
-                fontWeight: 500,
-                textAlign: "center",
-              }}
-            >
+            {/* Set number */}
+            <span style={{ fontSize: 13, color: "#888780", fontWeight: 500, textAlign: "center" }}>
               {set.id.split("-")[1]}
             </span>
-            <span
-              style={{
-                fontSize: 12,
-                color: "#888780",
-                textAlign: "center",
-              }}
-            >
-              {set.prev}
-            </span>
+
+            {isFromProgram ? (
+              <>
+                {/* Col 2: RPE target or Previous */}
+                <span style={{ fontSize: 12, color: "#888780", textAlign: "center" }}>
+                  {col2Mode === "rpe"
+                    ? set.programRPE !== undefined
+                      ? <span style={{ fontWeight: 600, color: "#7F77DD" }}>@{set.programRPE}</span>
+                      : "—"
+                    : set.prev || "—"}
+                </span>
+                {/* Col 3: Target */}
+                <span style={{ fontSize: 12, color: "#5F5E5A", fontWeight: 500, textAlign: "center" }}>
+                  {set.target ?? "—"}
+                </span>
+              </>
+            ) : (
+              <span style={{ fontSize: 12, color: "#888780", textAlign: "center" }}>
+                {set.prev}
+              </span>
+            )}
+
             <SetInput
               value={set.weight}
               placeholder="kg"
@@ -271,6 +360,7 @@ function ExerciseCard({ exercise, activeInput, onInputFocus, onToggleDone, onAdd
               placeholder="reps"
               isActive={isRepsActive}
               onClick={() => onInputFocus(exercise.id, set.id, "reps")}
+              rpe={set.rpe}
             />
             <SetCheckbox
               checked={set.done}
@@ -310,16 +400,35 @@ function ExerciseCard({ exercise, activeInput, onInputFocus, onToggleDone, onAdd
 
 // ─── Number Pad ───────────────────────────────────────────────────────────────
 
+const RPE_VALUES = [6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10] as const;
+const RPE_LABELS: Record<number, string> = {
+  6: "Moderate", 6.5: "Moderate", 7: "Vigorous",
+  7.5: "Vigorous", 8: "Hard", 8.5: "Hard",
+  9: "Very Hard", 9.5: "Very Hard", 10: "Max Effort",
+};
+
 interface NumpadProps {
   visible: boolean;
   onKey: (val: string) => void;
   onHide: () => void;
-  onRPE: () => void;
+  onRPE: (rpe: number) => void;
   onNext: () => void;
 }
 
 function Numpad({ visible, onKey, onHide, onRPE, onNext }: NumpadProps) {
+  const [showRPE, setShowRPE] = useState(false);
   const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "backspace"] as const;
+
+  // Reset to numpad when the pad is hidden
+  const handleHide = () => {
+    setShowRPE(false);
+    onHide();
+  };
+
+  const handleSelectRPE = (rpe: number) => {
+    onRPE(rpe);
+    setShowRPE(false);
+  };
 
   return (
     <div
@@ -335,99 +444,194 @@ function Numpad({ visible, onKey, onHide, onRPE, onNext }: NumpadProps) {
         transform: visible ? "translateY(0)" : "translateY(100%)",
         transition: "transform 0.22s cubic-bezier(0.4, 0, 0.2, 1)",
         zIndex: 70,
+        overflow: "hidden",
       }}
     >
-      {/* Toolbar */}
+      {/* Sliding panels container */}
       <div
         style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr",
-          borderBottom: "0.5px solid #D3D1C7",
+          display: "flex",
+          width: "200%",
+          transform: showRPE ? "translateX(-50%)" : "translateX(0)",
+          transition: "transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)",
         }}
       >
-        <button
-          onClick={onHide}
-          style={{
-            background: "none",
-            border: "none",
-            borderRight: "0.5px solid #D3D1C7",
-            padding: "12px 8px",
-            fontSize: 13,
-            fontWeight: 500,
-            color: "#5F5E5A",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <rect x="2" y="4" width="12" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M5 7.5h6M5 9.5h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-          Hide
-        </button>
-        <button
-          onClick={onRPE}
-          style={{
-            background: "none",
-            border: "none",
-            borderRight: "0.5px solid #D3D1C7",
-            padding: "12px 8px",
-            fontSize: 13,
-            fontWeight: 500,
-            color: "#5F5E5A",
-            cursor: "pointer",
-          }}
-        >
-          RPE
-        </button>
-        <button
-          onClick={onNext}
-          style={{
-            background: "none",
-            border: "none",
-            padding: "12px 8px",
-            fontSize: 13,
-            fontWeight: 600,
-            color: "#7F77DD",
-            cursor: "pointer",
-          }}
-        >
-          Next →
-        </button>
-      </div>
-
-      {/* Keys */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-        }}
-      >
-        {keys.map((key, i) => (
-          <button
-            key={key}
-            onClick={() => onKey(key)}
+        {/* ── Panel 1: Number pad ── */}
+        <div style={{ width: "50%", flexShrink: 0 }}>
+          {/* Toolbar */}
+          <div
             style={{
-              background: "none",
-              border: "none",
-              borderTop: "0.5px solid #D3D1C7",
-              borderRight: (i + 1) % 3 !== 0 ? "0.5px solid #D3D1C7" : "none",
-              padding: "14px 8px",
-              fontSize: key === "backspace" ? 16 : 20,
-              fontWeight: 400,
-              color: key === "backspace" || key === "." ? "#888780" : "#2C2C2A",
-              cursor: "pointer",
-              textAlign: "center",
-              transition: "background 0.1s",
-              WebkitTapHighlightColor: "transparent",
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              borderBottom: "0.5px solid #D3D1C7",
             }}
           >
-            {key === "backspace" ? "⌫" : key === "." ? "·" : key}
-          </button>
-        ))}
+            <button
+              onClick={handleHide}
+              style={{
+                background: "none",
+                border: "none",
+                borderRight: "0.5px solid #D3D1C7",
+                padding: "12px 8px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: "#5F5E5A",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <rect x="2" y="4" width="12" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M5 7.5h6M5 9.5h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+              Hide
+            </button>
+            <button
+              onClick={() => setShowRPE(true)}
+              style={{
+                background: "none",
+                border: "none",
+                borderRight: "0.5px solid #D3D1C7",
+                padding: "12px 8px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: "#5F5E5A",
+                cursor: "pointer",
+              }}
+            >
+              RPE
+            </button>
+            <button
+              onClick={onNext}
+              style={{
+                background: "none",
+                border: "none",
+                padding: "12px 8px",
+                fontSize: 13,
+                fontWeight: 600,
+                color: "#7F77DD",
+                cursor: "pointer",
+              }}
+            >
+              Next →
+            </button>
+          </div>
+
+          {/* Keys */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)" }}>
+            {keys.map((key, i) => (
+              <button
+                key={key}
+                onClick={() => onKey(key)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  borderTop: "0.5px solid #D3D1C7",
+                  borderRight: (i + 1) % 3 !== 0 ? "0.5px solid #D3D1C7" : "none",
+                  padding: "14px 8px",
+                  fontSize: key === "backspace" ? 16 : 20,
+                  fontWeight: 400,
+                  color: key === "backspace" || key === "." ? "#888780" : "#2C2C2A",
+                  cursor: "pointer",
+                  textAlign: "center",
+                  transition: "background 0.1s",
+                  WebkitTapHighlightColor: "transparent",
+                }}
+              >
+                {key === "backspace" ? "⌫" : key === "." ? "·" : key}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Panel 2: RPE pad ── */}
+        <div style={{ width: "50%", flexShrink: 0 }}>
+          {/* RPE toolbar */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              borderBottom: "0.5px solid #D3D1C7",
+            }}
+          >
+            <button
+              style={{
+                background: "none",
+                border: "none",
+                borderRight: "0.5px solid #D3D1C7",
+                padding: "12px 8px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: "#888780",
+                cursor: "default",
+                textAlign: "center",
+              }}
+            >
+              ?
+            </button>
+            <button
+              onClick={() => setShowRPE(false)}
+              style={{
+                background: "none",
+                border: "none",
+                padding: "12px 8px",
+                fontSize: 13,
+                fontWeight: 600,
+                color: "#7F77DD",
+                cursor: "pointer",
+              }}
+            >
+              ← Back
+            </button>
+          </div>
+
+          {/* Description */}
+          <div
+            style={{
+              padding: "8px 14px",
+              fontSize: 12,
+              color: "#888780",
+              borderBottom: "0.5px solid #D3D1C7",
+              lineHeight: 1.4,
+            }}
+          >
+            RPE is a way to measure the difficulty of a set. Tap a number to select an RPE value.
+          </div>
+
+          {/* RPE grid */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)" }}>
+            {RPE_VALUES.map((rpe, i) => (
+              <button
+                key={rpe}
+                onClick={() => handleSelectRPE(rpe)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  borderTop: "0.5px solid #D3D1C7",
+                  borderRight: (i + 1) % 3 !== 0 ? "0.5px solid #D3D1C7" : "none",
+                  padding: "12px 8px",
+                  cursor: "pointer",
+                  textAlign: "center",
+                  WebkitTapHighlightColor: "transparent",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 2,
+                }}
+              >
+                <span style={{ fontSize: 20, fontWeight: 500, color: "#2C2C2A" }}>
+                  {rpe % 1 === 0 ? rpe : rpe}
+                </span>
+                <span style={{ fontSize: 10, color: "#888780", fontWeight: 400 }}>
+                  {RPE_LABELS[rpe]}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -443,9 +647,31 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
   const activeSession = useTrainingStore((s) => s.activeSession);
   const sessions = useTrainingStore((s) => s.sessions);
   const addExerciseToStore = useTrainingStore((s) => s.addExercise);
-  const [exercises, setExercises] = useState<Exercise[]>(INITIAL_EXERCISES);
+  const updateSetInStore = useTrainingStore((s) => s.updateSet);
+  const addSetToStore = useTrainingStore((s) => s.addSetToExercise);
+  const isFromProgram = !!activeSession?.programDayId;
+  const [exercises, setExercises] = useState<Exercise[]>(() =>
+    buildInitialExercises(activeSession?.exercises)
+  );
   const [activeInput, setActiveInput] = useState<ActiveInput | null>(null);
   const [showAddExercise, setShowAddExercise] = useState(false);
+
+  // Re-sync local state when the store's exercise list grows (via addExercise from
+  // AddExerciseSheet) or when a new session starts. We track length to avoid
+  // clobbering the user's in-progress typed input on every store update.
+  const sessionIdRef = useRef(activeSession?.id);
+  const lastExerciseCountRef = useRef(activeSession?.exercises.length ?? 0);
+  useEffect(() => {
+    if (!activeSession) return;
+    const sessionChanged = sessionIdRef.current !== activeSession.id;
+    const exerciseCountChanged =
+      lastExerciseCountRef.current !== activeSession.exercises.length;
+    if (sessionChanged || exerciseCountChanged) {
+      setExercises(buildInitialExercises(activeSession.exercises));
+      sessionIdRef.current = activeSession.id;
+      lastExerciseCountRef.current = activeSession.exercises.length;
+    }
+  }, [activeSession]);
 
   const formattedTime = useElapsedTime(activeSession?.startTime ?? Date.now());
 
@@ -465,42 +691,56 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
     setActiveInput({ exId, setId, field });
   };
 
+  // Parse the local setId back into the store's set index (it's 1-based in the local id).
+  const setIndexFromId = (setId: string): number => {
+    const parts = setId.split("-");
+    const n = parseInt(parts[1] ?? "1", 10);
+    return Number.isFinite(n) ? n - 1 : 0;
+  };
+
   const handleToggleDone = (exId: number, setId: string) => {
+    let nextDone = false;
     setExercises((prev) =>
       prev.map((ex) =>
         ex.id !== exId
           ? ex
           : {
               ...ex,
-              sets: ex.sets.map((s) =>
-                s.id === setId ? { ...s, done: !s.done } : s
-              ),
+              sets: ex.sets.map((s) => {
+                if (s.id !== setId) return s;
+                nextDone = !s.done;
+                return { ...s, done: nextDone };
+              }),
             }
       )
     );
+    // Also persist the chosen weight/reps/rpe so the store reflects what the lifter logged.
+    const ex = exercises.find((e) => e.id === exId);
+    const set = ex?.sets.find((s) => s.id === setId);
+    const setIndex = setIndexFromId(setId);
+    const updates: Partial<SetLog> = { completed: nextDone };
+    if (set) {
+      const weight = parseFloat(set.weight);
+      const reps = parseInt(set.reps, 10);
+      if (Number.isFinite(weight)) updates.weight = weight;
+      if (Number.isFinite(reps)) updates.reps = reps;
+      if (set.rpe !== undefined) updates.rpe = set.rpe;
+      updates.timestamp = Date.now();
+    }
+    updateSetInStore(exId, setIndex, updates);
   };
 
   const handleAddSet = (exId: number) => {
-    setExercises((prev) =>
-      prev.map((ex) => {
-        if (ex.id !== exId) return ex;
-        const last = ex.sets[ex.sets.length - 1];
-        const newSet: WorkoutSet = {
-          id: `${exId}-${ex.sets.length + 1}`,
-          weight: last?.weight ?? "",
-          reps: "",
-          prev: last ? `${last.weight} kg × ${last.reps}` : "–",
-          done: false,
-        };
-        return { ...ex, sets: [...ex.sets, newSet] };
-      })
-    );
+    // Persist the new set first; the store's addSetToExercise mirrors the previous set's
+    // values so the user sees the same starting state. The useEffect above re-syncs local state.
+    addSetToStore(exId);
   };
 
   // Numpad handlers
   const handleNumpadKey = (val: string) => {
     if (!activeInput) return;
     const { exId, setId, field } = activeInput;
+    let nextValue = "";
 
     setExercises((prev) =>
       prev.map((ex) => {
@@ -518,11 +758,22 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
             } else {
               next = current + val;
             }
+            nextValue = next;
             return { ...s, [field]: next };
           }),
         };
       })
     );
+
+    // Persist the parsed value to the store so the Session reflects actual input.
+    const setIndex = setIndexFromId(setId);
+    const numeric = field === "weight" ? parseFloat(nextValue) : parseInt(nextValue, 10);
+    if (Number.isFinite(numeric)) {
+      updateSetInStore(exId, setIndex, { [field]: numeric });
+    } else if (nextValue === "") {
+      // Cleared input — reset to 0 in storage so it can't masquerade as logged data.
+      updateSetInStore(exId, setIndex, { [field]: 0 });
+    }
   };
 
   const handleHide = () => setActiveInput(null);
@@ -544,9 +795,18 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
     }
   };
 
-  const handleRPE = () => {
-    // Hook into your RPE flow here
-    console.log("RPE tapped for", activeInput);
+  const handleRPE = (rpe: number) => {
+    if (!activeInput) return;
+    const { exId, setId } = activeInput;
+    setExercises((prev) =>
+      prev.map((ex) =>
+        ex.id !== exId
+          ? ex
+          : { ...ex, sets: ex.sets.map((s) => (s.id === setId ? { ...s, rpe } : s)) }
+      )
+    );
+    const setIndex = setIndexFromId(setId);
+    updateSetInStore(exId, setIndex, { rpe });
   };
 
   const handleAddExercises = (newExercises: TrainingExercise[]) => {
@@ -686,6 +946,7 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
             onInputFocus={handleInputFocus}
             onToggleDone={handleToggleDone}
             onAddSet={handleAddSet}
+            isFromProgram={isFromProgram}
           />
         ))}
 

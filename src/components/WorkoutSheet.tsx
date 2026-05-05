@@ -100,7 +100,7 @@ export function WorkoutSheet({ open, onCollapse, onFinish, onCancel }: WorkoutSh
         ref={sheetRef}
         style={{
           position: "fixed",
-          top: "8vh",
+          top: "2vh",
           bottom: 0,
           left: 0,
           right: 0,

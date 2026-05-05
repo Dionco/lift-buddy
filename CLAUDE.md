@@ -43,3 +43,17 @@ This app is a powerlifting training tracker. Before making decisions about train
 **`docs/powerlifting-knowledge.md`** — Evidence-based powerlifting principles covering RPE, e1RM, progressive overload, fatigue, volume, periodization, rest periods, and the main lifts (Squat, Bench Press, Deadlift).
 
 For focused domain consultations during development, use the `/plift` skill.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues at `Dionco/lift-buddy`, accessed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles using default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.

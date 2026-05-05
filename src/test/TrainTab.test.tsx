@@ -11,30 +11,36 @@ vi.mock('@/store/useTrainingStore', () => ({
 
 import { useTrainingStore } from '@/store/useTrainingStore';
 
-// Minimal program fixture — one block, one day, 2 exercises
+// Minimal program fixture — one block, one week (weekNumber 2), one day, 2 exercises
 const mockProgram = {
   id: 'prog1',
   name: 'Test Program',
   currentBlockIndex: 0,
+  currentWeekIndex: 0,
   currentDayIndex: 0,
   blocks: [
     {
       id: 'b1',
       name: 'Block 1',
-      weekNumber: 2,
       focus: 'Strength',
-      days: [
+      weeks: [
         {
-          id: 'b1d1',
-          name: 'Day 1 — Squat',
-          exercises: [
+          id: 'b1w1',
+          weekNumber: 2,
+          days: [
             {
-              exercise: { id: 'squat', name: 'Squat', muscleGroup: 'Quads', isMainLift: true },
-              prescription: { sets: 5, reps: '5', rpeTarget: 8 },
-            },
-            {
-              exercise: { id: 'press', name: 'Leg Press', muscleGroup: 'Quads', isMainLift: false },
-              prescription: { sets: 3, reps: '10-12', rpeTarget: undefined },
+              id: 'b1d1',
+              name: 'Day 1 — Squat',
+              exercises: [
+                {
+                  exercise: { id: 'squat', name: 'Squat', muscleGroup: 'Quads', isMainLift: true },
+                  prescription: { sets: 5, reps: '5', rpeTarget: 8 },
+                },
+                {
+                  exercise: { id: 'press', name: 'Leg Press', muscleGroup: 'Quads', isMainLift: false },
+                  prescription: { sets: 3, reps: '10-12', rpeTarget: undefined },
+                },
+              ],
             },
           ],
         },
@@ -43,16 +49,18 @@ const mockProgram = {
   ],
 };
 
-const mockStoreWithProgram = { program: mockProgram };
+const mockStoreWithProgram = { program: mockProgram, sessions: [] };
 
 const mockStoreNoProgram = {
   program: {
     id: 'empty',
     name: 'Empty',
     currentBlockIndex: 99, // out of bounds → currentBlock undefined
+    currentWeekIndex: 0,
     currentDayIndex: 0,
     blocks: [],
   },
+  sessions: [],
 };
 
 describe('TrainTab', () => {
