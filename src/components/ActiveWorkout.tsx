@@ -1,396 +1,364 @@
-import { useState, useCallback, useEffect, useRef } from "react";
-import { createPortal } from "react-dom";
-import { useTrainingStore } from "@/store/useTrainingStore";
-import { useElapsedTime } from "@/hooks/useElapsedTime";
-import { Exercise as TrainingExercise, ExerciseLog, SetLog } from "@/types/training";
-import { AddExerciseSheet } from "./AddExerciseSheet";
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import { useTrainingStore } from '@/store/useTrainingStore';
+import { useElapsedTime } from '@/hooks/useElapsedTime';
+import {
+  Exercise as TrainingExercise,
+  ExerciseLog,
+  Session,
+  SetLog,
+  calculateE1RM,
+} from '@/types/training';
+import { lastTopSet } from '@/lib/topSet';
+import { AddExerciseSheet } from './AddExerciseSheet';
+import { Swipeable } from './Swipeable';
 
-let _exerciseIdCounter = Date.now();
-const nextExerciseId = () => ++_exerciseIdCounter;
+// ─── Local UI shape ────────────────────────────────────────────────────────
 
-/**
- * Convert a store ExerciseLog (positional in activeSession.exercises) into the
- * UI's local Exercise shape. `exId` is the array index — that's our stable handle
- * back into the store for `updateSet` / `addSetToExercise` / etc.
- *
- * Per ADR-0006: the UI shows actual logged values. Reps starts blank, never
- * defaulted from prescription. Weight starts blank too unless previously typed.
- */
-function exerciseLogToLocal(log: ExerciseLog, exId: number): Exercise {
-  return {
-    id: exId,
-    name: log.exercise.name,
-    sets: log.sets.map((s, i) => ({
-      id: `${exId}-${i + 1}`,
-      weight: s.weight > 0 ? String(s.weight) : "",
-      reps: s.reps > 0 ? String(s.reps) : "",
-      prev: "—",
-      done: s.completed,
-      rpe: s.rpe,
-      programRPE: undefined,
-      target: undefined,
-    })),
-  };
-}
-
-function buildInitialExercises(activeSessionExercises: ExerciseLog[] | undefined): Exercise[] {
-  if (!activeSessionExercises || activeSessionExercises.length === 0) return [];
-  return activeSessionExercises.map(exerciseLogToLocal);
-}
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface WorkoutSet {
+interface UISet {
   id: string;
   weight: string;
   reps: string;
-  prev: string;
+  rpe: number;
   done: boolean;
-  rpe?: number;
-  /** RPE target prescribed by the program */
   programRPE?: number;
-  /** Target weight × reps prescribed by the program, e.g. "100 × 5" */
-  target?: string;
 }
 
-interface Exercise {
-  id: number;
+interface UIExercise {
+  exId: number;
+  exerciseId: string;
   name: string;
-  sets: WorkoutSet[];
+  isMainLift: boolean;
+  prescription?: { sets: number; reps: string; rpeTarget?: number };
+  prevTop: SetLog | null;
+  sets: UISet[];
 }
 
 interface ActiveInput {
   exId: number;
   setId: string;
-  field: "weight" | "reps";
+  field: 'weight' | 'reps';
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+function buildInitial(
+  activeSessionExercises: ExerciseLog[] | undefined,
+  programDayId: string | undefined,
+  program: ReturnType<typeof useTrainingStore.getState>['program'],
+  sessions: Session[],
+): UIExercise[] {
+  if (!activeSessionExercises) return [];
+  const programDay =
+    programDayId &&
+    program.blocks[program.currentBlockIndex]?.weeks[program.currentWeekIndex]?.days[
+      program.currentDayIndex
+    ]?.id === programDayId
+      ? program.blocks[program.currentBlockIndex].weeks[program.currentWeekIndex].days[
+          program.currentDayIndex
+        ]
+      : undefined;
 
-interface CheckboxProps {
-  checked: boolean;
-  onToggle: () => void;
+  return activeSessionExercises.map((log, exId) => {
+    const pe = programDay?.exercises.find((p) => p.exercise.id === log.exercise.id);
+    const prevTop = lastTopSet(sessions, log.exercise.id);
+    return {
+      exId,
+      exerciseId: log.exercise.id,
+      name: log.exercise.name,
+      isMainLift: log.exercise.isMainLift,
+      prescription: pe?.prescription,
+      prevTop,
+      sets: log.sets.map((s, i) => ({
+        id: `${exId}-${i + 1}`,
+        weight: s.weight > 0 ? String(s.weight) : '',
+        reps: s.reps > 0 ? String(s.reps) : '',
+        rpe: s.rpe || pe?.prescription?.rpeTarget || 7,
+        done: s.completed,
+        programRPE: pe?.prescription?.rpeTarget,
+      })),
+    };
+  });
 }
 
-function SetCheckbox({ checked, onToggle }: CheckboxProps) {
+// ─── Numpad ────────────────────────────────────────────────────────────────
+
+const RPE_VALUES = [6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10] as const;
+const RPE_LABELS: Record<number, string> = {
+  6: 'Moderate',
+  6.5: 'Moderate',
+  7: 'Vigorous',
+  7.5: 'Vigorous',
+  8: 'Hard',
+  8.5: 'Hard',
+  9: 'Very Hard',
+  9.5: 'Very Hard',
+  10: 'Max Effort',
+};
+
+interface NumpadProps {
+  visible: boolean;
+  active: ActiveInput | null;
+  exercises: UIExercise[];
+  onKey: (key: string) => void;
+  onHide: () => void;
+  onNext: () => void;
+  onRPE: (rpe: number) => void;
+}
+
+function Numpad({ visible, active, exercises, onKey, onHide, onNext, onRPE }: NumpadProps) {
+  const [showRPE, setShowRPE] = useState(false);
+
+  const previewSet = useMemo(() => {
+    if (!active) return null;
+    const ex = exercises.find((e) => e.exId === active.exId);
+    return ex?.sets.find((s) => s.id === active.setId) ?? null;
+  }, [active, exercises]);
+
+  const liveE1RM =
+    previewSet && previewSet.weight && previewSet.reps
+      ? calculateE1RM(parseFloat(previewSet.weight), parseInt(previewSet.reps, 10), previewSet.rpe)
+      : 0;
+
+  const fieldVal = previewSet && active ? previewSet[active.field] : '';
+
   return (
-    <button
-      onClick={onToggle}
-      style={{
-        width: 22,
-        height: 22,
-        borderRadius: "50%",
-        border: checked ? "1.5px solid #7F77DD" : "1.5px solid #B4B2A9",
-        background: checked ? "#7F77DD" : "transparent",
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        margin: "0 auto",
-        transition: "all 0.15s",
-        padding: 0,
-      }}
-    >
-      {checked && (
-        <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-          <path d="M2 5.5l2.5 2.5 4.5-4.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      )}
-    </button>
-  );
-}
+    <div data-numpad className={`np ${visible ? 'is-visible' : ''}`}>
+      <div className="np-preview">
+        <div className="np-preview-block">
+          <div className="np-preview-label">{active?.field === 'reps' ? 'Reps' : 'Weight'}</div>
+          <div className="np-preview-val">
+            {fieldVal || '—'}
+            {active?.field === 'weight' && previewSet?.weight && (
+              <span className="np-preview-unit">kg</span>
+            )}
+          </div>
+        </div>
+        <div className="np-preview-block">
+          <div className="np-preview-label">RPE</div>
+          <div className="np-preview-val">{previewSet?.rpe ?? '—'}</div>
+        </div>
+        <div className="np-preview-block np-preview-e1rm">
+          <div className="np-preview-label">e1RM</div>
+          <div className="np-preview-val">
+            {liveE1RM > 0 ? liveE1RM.toFixed(1) : '—'}
+            {liveE1RM > 0 && <span className="np-preview-unit">kg</span>}
+          </div>
+        </div>
+      </div>
 
-interface SetInputProps {
-  value: string;
-  placeholder: string;
-  isActive: boolean;
-  onClick: () => void;
-  rpe?: number;
-}
-
-function SetInput({ value, placeholder, isActive, onClick, rpe }: SetInputProps) {
-  return (
-    <div
-      data-set-input
-      onClick={onClick}
-      style={{
-        position: "relative",
-        background: isActive ? "#EEEDFE" : "#F1EFE8",
-        border: `0.5px solid ${isActive ? "#7F77DD" : "#D3D1C7"}`,
-        borderRadius: 6,
-        padding: "6px 0",
-        fontSize: 14,
-        fontWeight: 500,
-        color: isActive ? "#3C3489" : value ? "#2C2C2A" : "#888780",
-        textAlign: "center",
-        cursor: "pointer",
-        transition: "border-color 0.15s, background 0.15s",
-        width: "100%",
-        userSelect: "none",
-      }}
-    >
-      {value || placeholder}
-      {rpe !== undefined && (
-        <span
-          style={{
-            position: "absolute",
-            top: -5,
-            right: -5,
-            background: "#7F77DD",
-            color: "white",
-            fontSize: 9,
-            fontWeight: 700,
-            lineHeight: 1,
-            padding: "2px 3px",
-            borderRadius: 4,
-            letterSpacing: "0.01em",
-            pointerEvents: "none",
-          }}
+      <div className="np-toolbar">
+        <button type="button" className="np-tool" onClick={onHide}>
+          Done
+        </button>
+        <button
+          type="button"
+          className="np-tool np-tool--rpe"
+          onClick={() => setShowRPE((s) => !s)}
         >
-          {rpe % 1 === 0 ? rpe : rpe}
-        </span>
+          <span className="np-tool-rpe-label">RPE</span>
+          <span className="np-tool-rpe-val">{previewSet?.rpe ?? '—'}</span>
+        </button>
+        <button type="button" className="np-tool np-tool--next" onClick={onNext}>
+          Next →
+        </button>
+      </div>
+
+      {showRPE ? (
+        <div className="np-rpe-grid">
+          {RPE_VALUES.map((rpe) => (
+            <button
+              key={rpe}
+              type="button"
+              className={`np-rpe-btn ${previewSet?.rpe === rpe ? 'is-active' : ''}`}
+              onClick={() => {
+                onRPE(rpe);
+                setShowRPE(false);
+              }}
+            >
+              <span className="np-rpe-num">{rpe}</span>
+              <span className="np-rpe-tag">{RPE_LABELS[rpe]}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="np-keys-grid">
+          {(['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'back'] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              className={`np-key ${k === 'back' ? 'is-back' : ''} ${k === '.' ? 'is-dot' : ''}`}
+              onClick={() => onKey(k)}
+            >
+              {k === 'back' ? (
+                <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
+                  <path d="M6 1L1 7l5 6h11V1H6z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+                  <path d="M9 5l4 4M13 5l-4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                </svg>
+              ) : (
+                k
+              )}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-interface ExerciseCardProps {
-  exercise: Exercise;
-  activeInput: ActiveInput | null;
-  onInputFocus: (exId: number, setId: string, field: "weight" | "reps") => void;
-  onToggleDone: (exId: number, setId: string) => void;
-  onAddSet: (exId: number) => void;
-  isFromProgram: boolean;
+// ─── Exercise block ────────────────────────────────────────────────────────
+
+interface ExerciseBlockProps {
+  ex: UIExercise;
+  active: ActiveInput | null;
+  onFocus: (setId: string, field: 'weight' | 'reps') => void;
+  onToggleDone: (setId: string) => void;
+  onAddSet: () => void;
+  onApplyTarget: (setId: string) => void;
+  onDeleteSet: (setId: string) => void;
 }
 
-function ExerciseCard({ exercise, activeInput, onInputFocus, onToggleDone, onAddSet, isFromProgram }: ExerciseCardProps) {
-  const [col2Mode, setCol2Mode] = useState<"rpe" | "prev">("rpe");
-
-  // Program layout: Set | RPE/Prev | Target | kg | Reps | ✓
-  // Free layout:    Set | Previous | kg | Reps | ✓
-  const grid = isFromProgram
-    ? "24px 1fr 1fr 56px 56px 28px"
-    : "28px 1fr 60px 60px 28px";
+function ExerciseBlock({ ex, active, onFocus, onToggleDone, onAddSet, onApplyTarget, onDeleteSet }: ExerciseBlockProps) {
+  const topE1RM = ex.sets.reduce((best, s) => {
+    if (!s.done) return best;
+    const w = parseFloat(s.weight);
+    const r = parseInt(s.reps, 10);
+    if (!Number.isFinite(w) || !Number.isFinite(r)) return best;
+    const e = calculateE1RM(w, r, s.rpe);
+    return e > best ? e : best;
+  }, 0);
 
   return (
-    <div
-      style={{
-        background: "#FFFFFF",
-        border: "0.5px solid #D3D1C7",
-        borderRadius: 12,
-        overflow: "hidden",
-        flexShrink: 0,
-      }}
-    >
-      {/* Card header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "12px 14px 10px",
-          borderBottom: "0.5px solid #D3D1C7",
-        }}
-      >
-        <button
-          style={{
-            background: "none",
-            border: "none",
-            padding: 0,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: 14,
-            fontWeight: 600,
-            color: "#7F77DD",
-            cursor: "pointer",
-          }}
-        >
-          {exercise.name}
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-            <path d="M4.5 3l3 3-3 3" stroke="#7F77DD" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    <div className={`xb ${ex.isMainLift ? 'is-main' : ''}`}>
+      <div className="xb-head">
+        <div className="xb-head-left">
+          {ex.isMainLift && <span className="xb-tag">Main</span>}
+          <h2 className="xb-name">{ex.name}</h2>
+        </div>
+        <button type="button" className="xb-more" aria-label="More">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <circle cx="2.5" cy="7" r="1" fill="currentColor" />
+            <circle cx="7" cy="7" r="1" fill="currentColor" />
+            <circle cx="11.5" cy="7" r="1" fill="currentColor" />
           </svg>
         </button>
-        <button
-          style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            color: "#888780",
-            fontSize: 18,
-            letterSpacing: 2,
-            padding: "0 4px",
-            lineHeight: 1,
-          }}
-        >
-          ···
-        </button>
       </div>
 
-      {/* Column headers */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: grid,
-          gap: 6,
-          padding: "6px 14px",
-          alignItems: "center",
-        }}
-      >
-        {/* Set */}
-        <span style={{ fontSize: 11, fontWeight: 500, color: "#888780", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-          Set
-        </span>
+      {topE1RM > 0 && (
+        <div className="xb-meta">
+          <span className="xb-e1rm">
+            <span className="xb-e1rm-label">Top e1RM</span>
+            <span className="xb-e1rm-val">{topE1RM.toFixed(1)}</span>
+            <span className="xb-e1rm-unit">kg</span>
+          </span>
+        </div>
+      )}
 
-        {isFromProgram ? (
-          <>
-            {/* Col 2: RPE/Prev toggle */}
+      <div className="xb-cols">
+        <span className="xb-col-set">Set</span>
+        <span className="xb-col-target">Target</span>
+        <span className="xb-col-input">Weight</span>
+        <span className="xb-col-input">Reps</span>
+        <span className="xb-col-rpe">RPE</span>
+        <span className="xb-col-done" />
+      </div>
+
+      {ex.sets.map((s, i) => {
+        const isWA = active?.exId === ex.exId && active.setId === s.id && active.field === 'weight';
+        const isRA = active?.exId === ex.exId && active.setId === s.id && active.field === 'reps';
+        const w = parseFloat(s.weight);
+        const r = parseInt(s.reps, 10);
+        const e1rm =
+          Number.isFinite(w) && Number.isFinite(r) && w > 0 && r > 0 ? calculateE1RM(w, r, s.rpe) : 0;
+        // A set is "non-programmed" when there's no prescription, or when its
+        // index is past the prescribed set count (i.e. user-added via Add Set).
+        const isExtraSet =
+          !ex.prescription || i >= (ex.prescription?.sets ?? Number.POSITIVE_INFINITY);
+        const rowInner = (
+          <div className={`xb-row ${s.done ? 'is-done' : ''} ${isWA || isRA ? 'is-active' : ''}`}>
+            <div className="xb-set-num">{i + 1}</div>
             <button
-              onClick={() => setCol2Mode((m) => (m === "rpe" ? "prev" : "rpe"))}
-              style={{
-                background: "none",
-                border: "none",
-                padding: 0,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 3,
+              type="button"
+              className="xb-target"
+              onClick={(e) => {
+                e.stopPropagation();
+                onApplyTarget(s.id);
               }}
+              title={
+                ex.prevTop
+                  ? `Tap to use previous: ${ex.prevTop.weight}kg × ${ex.prescription?.reps ?? ex.prevTop.reps}`
+                  : 'Tap to apply target'
+              }
             >
-              <span style={{ fontSize: 11, fontWeight: 500, color: "#7F77DD", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                {col2Mode === "rpe" ? "RPE" : "Prev"}
-              </span>
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <path d="M1 3.5h8M1 6.5h8M3 1.5L1 3.5l2 2M7 4.5l2 2-2 2" stroke="#7F77DD" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              {ex.prescription ? (
+                <>
+                  {ex.prevTop && (
+                    <span className="xb-target-w">
+                      {ex.prevTop.weight}
+                      <span className="xb-target-unit">kg</span>
+                    </span>
+                  )}
+                  <span className="xb-target-x">×</span>
+                  <span className="xb-target-reps">{ex.prescription.reps}</span>
+                  {ex.prescription.rpeTarget != null && (
+                    <span className="xb-target-rpe">@{ex.prescription.rpeTarget}</span>
+                  )}
+                </>
+              ) : (
+                <span className="xb-target-empty">—</span>
+              )}
             </button>
-            {/* Col 3: Target */}
-            <span style={{ fontSize: 11, fontWeight: 500, color: "#888780", textTransform: "uppercase", letterSpacing: "0.04em", textAlign: "center" }}>
-              Target
-            </span>
-          </>
-        ) : (
-          <span style={{ fontSize: 11, fontWeight: 500, color: "#888780", textTransform: "uppercase", letterSpacing: "0.04em", textAlign: "center" }}>
-            Previous
-          </span>
-        )}
-
-        {/* kg, Reps, empty */}
-        {(["kg", "Reps", ""] as const).map((label, i) => (
-          <span
-            key={label + i}
-            style={{
-              fontSize: 11,
-              fontWeight: 500,
-              color: "#888780",
-              textTransform: "uppercase",
-              letterSpacing: "0.04em",
-              textAlign: "center",
-            }}
-          >
-            {label}
-          </span>
-        ))}
-      </div>
-
-      {/* Set rows */}
-      {exercise.sets.map((set) => {
-        const isWeightActive =
-          activeInput?.exId === exercise.id &&
-          activeInput.setId === set.id &&
-          activeInput.field === "weight";
-        const isRepsActive =
-          activeInput?.exId === exercise.id &&
-          activeInput.setId === set.id &&
-          activeInput.field === "reps";
-        const rowActive = isWeightActive || isRepsActive;
-
-        return (
-          <div
-            key={set.id}
-            style={{
-              display: "grid",
-              gridTemplateColumns: grid,
-              gap: 6,
-              padding: "5px 14px",
-              alignItems: "center",
-              background: rowActive ? "#F3F2FD" : "transparent",
-              borderRadius: 6,
-              margin: "0 4px",
-              opacity: set.done ? 0.5 : 1,
-              transition: "opacity 0.15s, background 0.15s",
-            }}
-          >
-            {/* Set number */}
-            <span style={{ fontSize: 13, color: "#888780", fontWeight: 500, textAlign: "center" }}>
-              {set.id.split("-")[1]}
-            </span>
-
-            {isFromProgram ? (
-              <>
-                {/* Col 2: RPE target or Previous */}
-                <span style={{ fontSize: 12, color: "#888780", textAlign: "center" }}>
-                  {col2Mode === "rpe"
-                    ? set.programRPE !== undefined
-                      ? <span style={{ fontWeight: 600, color: "#7F77DD" }}>@{set.programRPE}</span>
-                      : "—"
-                    : set.prev || "—"}
-                </span>
-                {/* Col 3: Target */}
-                <span style={{ fontSize: 12, color: "#5F5E5A", fontWeight: 500, textAlign: "center" }}>
-                  {set.target ?? "—"}
-                </span>
-              </>
-            ) : (
-              <span style={{ fontSize: 12, color: "#888780", textAlign: "center" }}>
-                {set.prev}
-              </span>
-            )}
-
-            <SetInput
-              value={set.weight}
-              placeholder="kg"
-              isActive={isWeightActive}
-              onClick={() => onInputFocus(exercise.id, set.id, "weight")}
-            />
-            <SetInput
-              value={set.reps}
-              placeholder="reps"
-              isActive={isRepsActive}
-              onClick={() => onInputFocus(exercise.id, set.id, "reps")}
-              rpe={set.rpe}
-            />
-            <SetCheckbox
-              checked={set.done}
-              onToggle={() => onToggleDone(exercise.id, set.id)}
-            />
+            <button
+              data-set-input
+              type="button"
+              className={`xb-input ${isWA ? 'is-active' : ''} ${s.weight ? 'has-val' : ''}`}
+              onClick={() => onFocus(s.id, 'weight')}
+            >
+              {s.weight || <span className="xb-ph">kg</span>}
+            </button>
+            <button
+              data-set-input
+              type="button"
+              className={`xb-input ${isRA ? 'is-active' : ''} ${s.reps ? 'has-val' : ''}`}
+              onClick={() => onFocus(s.id, 'reps')}
+            >
+              {s.reps || <span className="xb-ph">reps</span>}
+            </button>
+            <div className="xb-rpe">{s.rpe}</div>
+            <button
+              type="button"
+              className={`xb-check ${s.done ? 'is-done' : ''}`}
+              onClick={() => onToggleDone(s.id)}
+              aria-label="Mark complete"
+            >
+              {s.done && (
+                <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+                  <path
+                    d="M2 5.5l2.5 2.5 4.5-4.5"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
+            </button>
+            {e1rm > 0 && <div className="xb-row-e1rm">e1RM {e1rm.toFixed(1)}kg</div>}
           </div>
+        );
+        if (!isExtraSet) return <div key={s.id}>{rowInner}</div>;
+        return (
+          <Swipeable
+            key={s.id}
+            onDelete={() => onDeleteSet(s.id)}
+            trackClassName="xb-row-swipe"
+          >
+            {rowInner}
+          </Swipeable>
         );
       })}
 
-      {/* Add set */}
-      <button
-        onClick={() => onAddSet(exercise.id)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 6,
-          width: "calc(100% - 28px)",
-          margin: "8px 14px 12px",
-          padding: 8,
-          background: "#F1EFE8",
-          border: "0.5px dashed #B4B2A9",
-          borderRadius: 8,
-          fontSize: 13,
-          color: "#5F5E5A",
-          cursor: "pointer",
-        }}
-      >
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-          <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <button type="button" className="xb-add" onClick={onAddSet}>
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
         Add Set
       </button>
@@ -398,246 +366,7 @@ function ExerciseCard({ exercise, activeInput, onInputFocus, onToggleDone, onAdd
   );
 }
 
-// ─── Number Pad ───────────────────────────────────────────────────────────────
-
-const RPE_VALUES = [6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10] as const;
-const RPE_LABELS: Record<number, string> = {
-  6: "Moderate", 6.5: "Moderate", 7: "Vigorous",
-  7.5: "Vigorous", 8: "Hard", 8.5: "Hard",
-  9: "Very Hard", 9.5: "Very Hard", 10: "Max Effort",
-};
-
-interface NumpadProps {
-  visible: boolean;
-  onKey: (val: string) => void;
-  onHide: () => void;
-  onRPE: (rpe: number) => void;
-  onNext: () => void;
-}
-
-function Numpad({ visible, onKey, onHide, onRPE, onNext }: NumpadProps) {
-  const [showRPE, setShowRPE] = useState(false);
-  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "backspace"] as const;
-
-  // Reset to numpad when the pad is hidden
-  const handleHide = () => {
-    setShowRPE(false);
-    onHide();
-  };
-
-  const handleSelectRPE = (rpe: number) => {
-    onRPE(rpe);
-    setShowRPE(false);
-  };
-
-  return (
-    <div
-      data-numpad
-      style={{
-        position: "fixed",
-        bottom: 0,
-        left: 0,
-        right: 0,
-        background: "#FFFFFF",
-        borderTop: "0.5px solid #B4B2A9",
-        borderRadius: "16px 16px 0 0",
-        transform: visible ? "translateY(0)" : "translateY(100%)",
-        transition: "transform 0.22s cubic-bezier(0.4, 0, 0.2, 1)",
-        zIndex: 70,
-        overflow: "hidden",
-      }}
-    >
-      {/* Sliding panels container */}
-      <div
-        style={{
-          display: "flex",
-          width: "200%",
-          transform: showRPE ? "translateX(-50%)" : "translateX(0)",
-          transition: "transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)",
-        }}
-      >
-        {/* ── Panel 1: Number pad ── */}
-        <div style={{ width: "50%", flexShrink: 0 }}>
-          {/* Toolbar */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr",
-              borderBottom: "0.5px solid #D3D1C7",
-            }}
-          >
-            <button
-              onClick={handleHide}
-              style={{
-                background: "none",
-                border: "none",
-                borderRight: "0.5px solid #D3D1C7",
-                padding: "12px 8px",
-                fontSize: 13,
-                fontWeight: 500,
-                color: "#5F5E5A",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 6,
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <rect x="2" y="4" width="12" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-                <path d="M5 7.5h6M5 9.5h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-              Hide
-            </button>
-            <button
-              onClick={() => setShowRPE(true)}
-              style={{
-                background: "none",
-                border: "none",
-                borderRight: "0.5px solid #D3D1C7",
-                padding: "12px 8px",
-                fontSize: 13,
-                fontWeight: 500,
-                color: "#5F5E5A",
-                cursor: "pointer",
-              }}
-            >
-              RPE
-            </button>
-            <button
-              onClick={onNext}
-              style={{
-                background: "none",
-                border: "none",
-                padding: "12px 8px",
-                fontSize: 13,
-                fontWeight: 600,
-                color: "#7F77DD",
-                cursor: "pointer",
-              }}
-            >
-              Next →
-            </button>
-          </div>
-
-          {/* Keys */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)" }}>
-            {keys.map((key, i) => (
-              <button
-                key={key}
-                onClick={() => onKey(key)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  borderTop: "0.5px solid #D3D1C7",
-                  borderRight: (i + 1) % 3 !== 0 ? "0.5px solid #D3D1C7" : "none",
-                  padding: "14px 8px",
-                  fontSize: key === "backspace" ? 16 : 20,
-                  fontWeight: 400,
-                  color: key === "backspace" || key === "." ? "#888780" : "#2C2C2A",
-                  cursor: "pointer",
-                  textAlign: "center",
-                  transition: "background 0.1s",
-                  WebkitTapHighlightColor: "transparent",
-                }}
-              >
-                {key === "backspace" ? "⌫" : key === "." ? "·" : key}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* ── Panel 2: RPE pad ── */}
-        <div style={{ width: "50%", flexShrink: 0 }}>
-          {/* RPE toolbar */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              borderBottom: "0.5px solid #D3D1C7",
-            }}
-          >
-            <button
-              style={{
-                background: "none",
-                border: "none",
-                borderRight: "0.5px solid #D3D1C7",
-                padding: "12px 8px",
-                fontSize: 13,
-                fontWeight: 500,
-                color: "#888780",
-                cursor: "default",
-                textAlign: "center",
-              }}
-            >
-              ?
-            </button>
-            <button
-              onClick={() => setShowRPE(false)}
-              style={{
-                background: "none",
-                border: "none",
-                padding: "12px 8px",
-                fontSize: 13,
-                fontWeight: 600,
-                color: "#7F77DD",
-                cursor: "pointer",
-              }}
-            >
-              ← Back
-            </button>
-          </div>
-
-          {/* Description */}
-          <div
-            style={{
-              padding: "8px 14px",
-              fontSize: 12,
-              color: "#888780",
-              borderBottom: "0.5px solid #D3D1C7",
-              lineHeight: 1.4,
-            }}
-          >
-            RPE is a way to measure the difficulty of a set. Tap a number to select an RPE value.
-          </div>
-
-          {/* RPE grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)" }}>
-            {RPE_VALUES.map((rpe, i) => (
-              <button
-                key={rpe}
-                onClick={() => handleSelectRPE(rpe)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  borderTop: "0.5px solid #D3D1C7",
-                  borderRight: (i + 1) % 3 !== 0 ? "0.5px solid #D3D1C7" : "none",
-                  padding: "12px 8px",
-                  cursor: "pointer",
-                  textAlign: "center",
-                  WebkitTapHighlightColor: "transparent",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 2,
-                }}
-              >
-                <span style={{ fontSize: 20, fontWeight: 500, color: "#2C2C2A" }}>
-                  {rpe % 1 === 0 ? rpe : rpe}
-                </span>
-                <span style={{ fontSize: 10, color: "#888780", fontWeight: 400 }}>
-                  {RPE_LABELS[rpe]}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Main Component ───────────────────────────────────────────────────────────
+// ─── Main component ────────────────────────────────────────────────────────
 
 interface ActiveWorkoutProps {
   onFinish: () => void;
@@ -646,63 +375,70 @@ interface ActiveWorkoutProps {
 export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
   const activeSession = useTrainingStore((s) => s.activeSession);
   const sessions = useTrainingStore((s) => s.sessions);
+  const program = useTrainingStore((s) => s.program);
   const addExerciseToStore = useTrainingStore((s) => s.addExercise);
   const updateSetInStore = useTrainingStore((s) => s.updateSet);
   const addSetToStore = useTrainingStore((s) => s.addSetToExercise);
-  const isFromProgram = !!activeSession?.programDayId;
-  const [exercises, setExercises] = useState<Exercise[]>(() =>
-    buildInitialExercises(activeSession?.exercises)
+  const removeSetFromStore = useTrainingStore((s) => s.removeSet);
+  const removeExerciseFromStore = useTrainingStore((s) => s.removeExercise);
+
+  const [exercises, setExercises] = useState<UIExercise[]>(() =>
+    buildInitial(activeSession?.exercises, activeSession?.programDayId, program, sessions),
   );
-  const [activeInput, setActiveInput] = useState<ActiveInput | null>(null);
+  const [active, setActive] = useState<ActiveInput | null>(null);
   const [showAddExercise, setShowAddExercise] = useState(false);
 
-  // Re-sync local state when the store's exercise list grows (via addExercise from
-  // AddExerciseSheet) or when a new session starts. We track length to avoid
-  // clobbering the user's in-progress typed input on every store update.
+  // Resync local state when the store's exercise list changes shape (add, remove,
+  // or session change). We use a fingerprint of the exercise ids — not just the
+  // length — so a delete-then-add of equal count still triggers a rebuild.
   const sessionIdRef = useRef(activeSession?.id);
-  const lastExerciseCountRef = useRef(activeSession?.exercises.length ?? 0);
+  const exerciseFingerprintRef = useRef(
+    activeSession?.exercises.map((e) => e.exercise.id).join('|') ?? '',
+  );
   useEffect(() => {
     if (!activeSession) return;
+    const fingerprint = activeSession.exercises.map((e) => e.exercise.id).join('|');
     const sessionChanged = sessionIdRef.current !== activeSession.id;
-    const exerciseCountChanged =
-      lastExerciseCountRef.current !== activeSession.exercises.length;
-    if (sessionChanged || exerciseCountChanged) {
-      setExercises(buildInitialExercises(activeSession.exercises));
+    const exercisesChanged = exerciseFingerprintRef.current !== fingerprint;
+    if (sessionChanged || exercisesChanged) {
+      setExercises(
+        buildInitial(activeSession.exercises, activeSession.programDayId, program, sessions),
+      );
       sessionIdRef.current = activeSession.id;
-      lastExerciseCountRef.current = activeSession.exercises.length;
+      exerciseFingerprintRef.current = fingerprint;
     }
-  }, [activeSession]);
+  }, [activeSession, program, sessions]);
 
   const formattedTime = useElapsedTime(activeSession?.startTime ?? Date.now());
 
-  // Input helpers
-  const getAllInputs = useCallback((): ActiveInput[] => {
-    const inputs: ActiveInput[] = [];
-    exercises.forEach((ex) => {
-      ex.sets.forEach((set) => {
-        inputs.push({ exId: ex.id, setId: set.id, field: "weight" });
-        inputs.push({ exId: ex.id, setId: set.id, field: "reps" });
-      });
-    });
-    return inputs;
-  }, [exercises]);
+  const totalSets = exercises.reduce((s, e) => s + e.sets.length, 0);
+  const doneSets = exercises.reduce((s, e) => s + e.sets.filter((x) => x.done).length, 0);
 
-  const handleInputFocus = (exId: number, setId: string, field: "weight" | "reps") => {
-    setActiveInput({ exId, setId, field });
+  const setIndexFromId = (setId: string): number => {
+    const parts = setId.split('-');
+    const n = parseInt(parts[1] ?? '1', 10);
+    return Number.isFinite(n) ? n - 1 : 0;
   };
 
-  // Parse the local setId back into the store's set index (it's 1-based in the local id).
-  const setIndexFromId = (setId: string): number => {
-    const parts = setId.split("-");
-    const n = parseInt(parts[1] ?? "1", 10);
-    return Number.isFinite(n) ? n - 1 : 0;
+  const updateSetLocal = (exId: number, setId: string, patch: Partial<UISet>) => {
+    setExercises((prev) =>
+      prev.map((ex) =>
+        ex.exId !== exId
+          ? ex
+          : { ...ex, sets: ex.sets.map((s) => (s.id !== setId ? s : { ...s, ...patch })) },
+      ),
+    );
+  };
+
+  const handleFocus = (exId: number, setId: string, field: 'weight' | 'reps') => {
+    setActive({ exId, setId, field });
   };
 
   const handleToggleDone = (exId: number, setId: string) => {
     let nextDone = false;
     setExercises((prev) =>
       prev.map((ex) =>
-        ex.id !== exId
+        ex.exId !== exId
           ? ex
           : {
               ...ex,
@@ -711,286 +447,269 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
                 nextDone = !s.done;
                 return { ...s, done: nextDone };
               }),
-            }
-      )
+            },
+      ),
     );
-    // Also persist the chosen weight/reps/rpe so the store reflects what the lifter logged.
-    const ex = exercises.find((e) => e.id === exId);
+    const ex = exercises.find((e) => e.exId === exId);
     const set = ex?.sets.find((s) => s.id === setId);
     const setIndex = setIndexFromId(setId);
     const updates: Partial<SetLog> = { completed: nextDone };
     if (set) {
-      const weight = parseFloat(set.weight);
-      const reps = parseInt(set.reps, 10);
-      if (Number.isFinite(weight)) updates.weight = weight;
-      if (Number.isFinite(reps)) updates.reps = reps;
-      if (set.rpe !== undefined) updates.rpe = set.rpe;
+      const w = parseFloat(set.weight);
+      const r = parseInt(set.reps, 10);
+      if (Number.isFinite(w)) updates.weight = w;
+      if (Number.isFinite(r)) updates.reps = r;
+      updates.rpe = set.rpe;
       updates.timestamp = Date.now();
     }
     updateSetInStore(exId, setIndex, updates);
   };
 
   const handleAddSet = (exId: number) => {
-    // Persist the new set first; the store's addSetToExercise mirrors the previous set's
-    // values so the user sees the same starting state. The useEffect above re-syncs local state.
+    // Persist first so the SetLog gets a real id from the store.
     addSetToStore(exId);
-  };
-
-  // Numpad handlers
-  const handleNumpadKey = (val: string) => {
-    if (!activeInput) return;
-    const { exId, setId, field } = activeInput;
-    let nextValue = "";
-
+    // Mirror in local UI state — the resync effect only fires when the outer
+    // exercises list grows, not when an inner sets array grows, so we have to
+    // append here too or the new row won't render.
     setExercises((prev) =>
       prev.map((ex) => {
-        if (ex.id !== exId) return ex;
+        if (ex.exId !== exId) return ex;
+        const last = ex.sets[ex.sets.length - 1];
+        const n = ex.sets.length + 1;
+        return {
+          ...ex,
+          sets: [
+            ...ex.sets,
+            {
+              id: `${exId}-${n}`,
+              weight: last?.weight ?? '',
+              reps: '',
+              rpe: last?.rpe ?? ex.prescription?.rpeTarget ?? 7,
+              done: false,
+              programRPE: ex.prescription?.rpeTarget,
+            },
+          ],
+        };
+      }),
+    );
+  };
+
+  const handleDeleteSet = (exId: number, setId: string) => {
+    const setIndex = setIndexFromId(setId);
+    removeSetFromStore(exId, setIndex);
+    setExercises((prev) =>
+      prev.map((ex) =>
+        ex.exId !== exId ? ex : { ...ex, sets: ex.sets.filter((s) => s.id !== setId) },
+      ),
+    );
+    // If the deleted set was the active focus, clear it.
+    setActive((cur) =>
+      cur && cur.exId === exId && cur.setId === setId ? null : cur,
+    );
+  };
+
+  const handleDeleteExercise = (exId: number) => {
+    removeExerciseFromStore(exId);
+    // No need to mirror locally — the resync effect detects the fingerprint
+    // change and rebuilds local state from the authoritative store.
+    setActive((cur) => (cur && cur.exId === exId ? null : cur));
+  };
+
+  const handleApplyTarget = (exId: number, setId: string) => {
+    const ex = exercises.find((e) => e.exId === exId);
+    if (!ex) return;
+    const weight = ex.prevTop ? String(ex.prevTop.weight) : '';
+    const reps = ex.prescription?.reps ?? (ex.prevTop ? String(ex.prevTop.reps) : '');
+    const repsParsed = parseInt(reps, 10);
+    const rpe = ex.prescription?.rpeTarget ?? ex.prevTop?.rpe ?? 7;
+    updateSetLocal(exId, setId, { weight, reps, rpe });
+    const setIndex = setIndexFromId(setId);
+    const patch: Partial<SetLog> = { rpe };
+    if (ex.prevTop) patch.weight = ex.prevTop.weight;
+    if (Number.isFinite(repsParsed)) patch.reps = repsParsed;
+    updateSetInStore(exId, setIndex, patch);
+  };
+
+  const getAllInputs = useCallback((): ActiveInput[] => {
+    const inputs: ActiveInput[] = [];
+    exercises.forEach((ex) => {
+      ex.sets.forEach((set) => {
+        inputs.push({ exId: ex.exId, setId: set.id, field: 'weight' });
+        inputs.push({ exId: ex.exId, setId: set.id, field: 'reps' });
+      });
+    });
+    return inputs;
+  }, [exercises]);
+
+  const handleNumpadKey = (key: string) => {
+    if (!active) return;
+    const { exId, setId, field } = active;
+    let nextValue = '';
+    setExercises((prev) =>
+      prev.map((ex) => {
+        if (ex.exId !== exId) return ex;
         return {
           ...ex,
           sets: ex.sets.map((s) => {
             if (s.id !== setId) return s;
-            const current = s[field];
+            const cur = s[field];
             let next: string;
-            if (val === "backspace") {
-              next = current.slice(0, -1);
-            } else if (val === "." && current.includes(".")) {
-              return s;
-            } else {
-              next = current + val;
-            }
+            if (key === 'back') next = cur.slice(0, -1);
+            else if (key === '.') {
+              if (cur.includes('.')) return s;
+              next = cur + '.';
+            } else next = cur + key;
             nextValue = next;
             return { ...s, [field]: next };
           }),
         };
-      })
+      }),
     );
-
-    // Persist the parsed value to the store so the Session reflects actual input.
     const setIndex = setIndexFromId(setId);
-    const numeric = field === "weight" ? parseFloat(nextValue) : parseInt(nextValue, 10);
+    const numeric = field === 'weight' ? parseFloat(nextValue) : parseInt(nextValue, 10);
     if (Number.isFinite(numeric)) {
       updateSetInStore(exId, setIndex, { [field]: numeric });
-    } else if (nextValue === "") {
-      // Cleared input — reset to 0 in storage so it can't masquerade as logged data.
+    } else if (nextValue === '') {
       updateSetInStore(exId, setIndex, { [field]: 0 });
     }
   };
 
-  const handleHide = () => setActiveInput(null);
-
   const handleNext = () => {
-    if (!activeInput) return;
+    if (!active) return;
     const all = getAllInputs();
     const idx = all.findIndex(
-      (i) =>
-        i.exId === activeInput.exId &&
-        i.setId === activeInput.setId &&
-        i.field === activeInput.field
+      (i) => i.exId === active.exId && i.setId === active.setId && i.field === active.field,
     );
-    if (idx < all.length - 1) {
-      const next = all[idx + 1];
-      setActiveInput(next);
-    } else {
-      setActiveInput(null);
-    }
+    if (idx >= 0 && idx < all.length - 1) setActive(all[idx + 1]);
+    else setActive(null);
   };
 
   const handleRPE = (rpe: number) => {
-    if (!activeInput) return;
-    const { exId, setId } = activeInput;
-    setExercises((prev) =>
-      prev.map((ex) =>
-        ex.id !== exId
-          ? ex
-          : { ...ex, sets: ex.sets.map((s) => (s.id === setId ? { ...s, rpe } : s)) }
-      )
-    );
-    const setIndex = setIndexFromId(setId);
-    updateSetInStore(exId, setIndex, { rpe });
+    if (!active) return;
+    updateSetLocal(active.exId, active.setId, { rpe });
+    const setIndex = setIndexFromId(active.setId);
+    updateSetInStore(active.exId, setIndex, { rpe });
   };
 
   const handleAddExercises = (newExercises: TrainingExercise[]) => {
     if (!activeSession) return;
+    // Just persist to the store — the resync useEffect detects the length
+    // change and rebuilds local UI state from the authoritative store data.
+    // This guarantees each new exercise's local exId equals its real store
+    // index (positional), which all later mutations (updateSet, removeSet,
+    // addSetToExercise, removeExercise) require.
     newExercises.forEach((ex) => {
       addExerciseToStore({ exercise: ex, sets: [] });
     });
-    setExercises((prev) => [
-      ...prev,
-      ...newExercises.map((ex) => ({
-        id: nextExerciseId(),
-        name: ex.name,
-        sets: [],
-      })),
-    ]);
     setShowAddExercise(false);
   };
 
+  const cleanName =
+    activeSession?.workoutName?.replace(/^Week\s*\d+\s*[·-]\s*Day\s*\d+\s*[—-]\s*/, '') ??
+    activeSession?.workoutName ??
+    'Session';
+
   return (
     <div
-      style={{
-        flex: 1,
-        minHeight: 0,
-        display: "flex",
-        flexDirection: "column",
-        background: "#F1EFE8",
-      }}
+      className="active-session"
       onClick={(e) => {
-        const target = e.target as HTMLElement;
-        if (!target.closest("[data-numpad]") && !target.closest("[data-set-input]")) {
-          setActiveInput(null);
-        }
+        const t = e.target as HTMLElement;
+        if (!t.closest('[data-numpad]') && !t.closest('[data-set-input]')) setActive(null);
       }}
     >
-      {/* Top bar */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "14px 16px 12px",
-          background: "#FFFFFF",
-          borderBottom: "0.5px solid #D3D1C7",
-          flexShrink: 0,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "8px 14px",
-            border: "0.5px solid #B4B2A9",
-            borderRadius: 20,
-            fontSize: 14,
-            fontWeight: 500,
-            color: "#2C2C2A",
-            cursor: "pointer",
-            userSelect: "none",
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <rect x="3" y="2" width="3" height="10" rx="1" fill="currentColor" />
-            <rect x="8" y="2" width="3" height="10" rx="1" fill="currentColor" />
+      <div className="as-topbar">
+        {/* <button type="button" className="as-cancel" onClick={onFinish} aria-label="Collapse">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M4 6l4 4 4-4"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
-          {formattedTime}
+        </button> */}
+        <div className="as-timer">
+          <span className="as-timer-dot" />
+          <span className="as-timer-val">{formattedTime}</span>
         </div>
-        <button
-          style={{
-            background: "#7F77DD",
-            color: "white",
-            border: "none",
-            borderRadius: 20,
-            padding: "8px 22px",
-            fontSize: 14,
-            fontWeight: 500,
-            cursor: "pointer",
-          }}
-          onClick={onFinish}
-        >
+        <button type="button" className="as-finish" onClick={onFinish}>
           Finish
         </button>
       </div>
 
-      {/* Workout title */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "14px 16px 0",
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ fontSize: 20, fontWeight: 600, color: "#2C2C2A" }}>
-          {activeSession?.workoutName ?? "Workout"}
-        </span>
-        <button
-          style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            color: "#888780",
-            padding: 4,
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <path d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z" />
-          </svg>
-        </button>
+      <div className="as-head">
+        <div className="as-head-eyebrow">
+          <span>Session in progress</span>
+          <span className="as-head-dot">·</span>
+          <span>
+            {doneSets}/{totalSets} sets logged
+          </span>
+        </div>
+        <h1 className="as-head-title">{cleanName}</h1>
+        <div className="as-head-bar">
+          <div
+            className="as-head-bar-fill"
+            style={{ width: `${(doneSets / Math.max(totalSets, 1)) * 100}%` }}
+          />
+        </div>
       </div>
 
-      {/* Scrollable exercise list */}
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: "auto",
-          overscrollBehavior: "contain",
-          WebkitOverflowScrolling: "touch",
-          touchAction: "pan-y",
-          paddingTop: 12,
-          paddingLeft: 16,
-          paddingRight: 16,
-          paddingBottom: activeInput !== null ? 280 : 24,
-          transition: "padding-bottom 0.22s cubic-bezier(0.4, 0, 0.2, 1)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-        }}
-      >
-        {exercises.map((ex) => (
-          <ExerciseCard
-            key={ex.id}
-            exercise={ex}
-            activeInput={activeInput}
-            onInputFocus={handleInputFocus}
-            onToggleDone={handleToggleDone}
-            onAddSet={handleAddSet}
-            isFromProgram={isFromProgram}
-          />
-        ))}
-
+      <div className="as-stack" style={{ paddingBottom: active ? 360 : 80 }}>
+        {exercises.map((ex) => {
+          const block = (
+            <ExerciseBlock
+              ex={ex}
+              active={active}
+              onFocus={(setId, field) => handleFocus(ex.exId, setId, field)}
+              onToggleDone={(setId) => handleToggleDone(ex.exId, setId)}
+              onAddSet={() => handleAddSet(ex.exId)}
+              onApplyTarget={(setId) => handleApplyTarget(ex.exId, setId)}
+              onDeleteSet={(setId) => handleDeleteSet(ex.exId, setId)}
+            />
+          );
+          // Whole exercise is deletable when it has no prescription
+          // (added mid-session via Add Exercise, or part of an empty workout).
+          if (ex.prescription) return <div key={ex.exId}>{block}</div>;
+          return (
+            <Swipeable
+              key={ex.exId}
+              onDelete={() => handleDeleteExercise(ex.exId)}
+              className="xb-swipe-shell"
+              revealWidth={96}
+            >
+              {block}
+            </Swipeable>
+          );
+        })}
         <button
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
-            width: "100%",
-            padding: 13,
-            background: "#7F77DD",
-            border: "none",
-            borderRadius: 12,
-            fontSize: 14,
-            fontWeight: 500,
-            color: "white",
-            cursor: "pointer",
-            flexShrink: 0,   // ← ADD THIS
-          }}
+          type="button"
+          className="as-add-ex"
           onClick={() => setShowAddExercise(true)}
         >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M8 2v12M2 8h12" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
           </svg>
           Add Exercise
         </button>
       </div>
 
-      {/* Number pad — rendered at document.body via portal so it is truly
-           viewport-fixed and unaffected by WorkoutSheet's transform/clip-path */}
       {createPortal(
         <Numpad
-          visible={activeInput !== null}
+          visible={active !== null}
+          active={active}
+          exercises={exercises}
           onKey={handleNumpadKey}
-          onHide={handleHide}
-          onRPE={handleRPE}
+          onHide={() => setActive(null)}
           onNext={handleNext}
+          onRPE={handleRPE}
         />,
         document.body,
       )}
       <AddExerciseSheet
         visible={showAddExercise}
         sessions={sessions}
+        existingIds={exercises.map((e) => e.exerciseId)}
         onClose={() => setShowAddExercise(false)}
         onAdd={handleAddExercises}
       />

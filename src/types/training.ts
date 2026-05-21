@@ -1,14 +1,53 @@
 export type MuscleGroup =
+  // Lower
   | 'Quads'
-  | 'Glutes'
-  | 'Chest'
-  | 'Triceps'
-  | 'Back'
   | 'Hamstrings'
-  | 'Shoulders'
+  | 'Glutes'
+  | 'Adductors'
+  | 'Calves'
+  | 'Spinal Erectors'
+  // Upper push
+  | 'Chest'
+  | 'Front Delts'
+  | 'Side Delts'
+  | 'Triceps'
+  // Upper pull
+  | 'Lats'
+  | 'Upper Back'
+  | 'Traps'
+  | 'Rear Delts'
   | 'Biceps'
-  | 'Core'
-  | 'Posterior Chain';
+  | 'Forearms'
+  // Midsection
+  | 'Core';
+
+export type MuscleRegion = 'Lower' | 'Push' | 'Pull' | 'Core';
+
+/**
+ * Region grouping used purely for UI sorting/sectioning of muscle filter chips
+ * and Progress-tab bars. Not part of the volume math; volume is per-muscle.
+ */
+export const MUSCLE_REGION: Record<MuscleGroup, MuscleRegion> = {
+  Quads: 'Lower',
+  Hamstrings: 'Lower',
+  Glutes: 'Lower',
+  Adductors: 'Lower',
+  Calves: 'Lower',
+  'Spinal Erectors': 'Lower',
+  Chest: 'Push',
+  'Front Delts': 'Push',
+  'Side Delts': 'Push',
+  Triceps: 'Push',
+  Lats: 'Pull',
+  'Upper Back': 'Pull',
+  Traps: 'Pull',
+  'Rear Delts': 'Pull',
+  Biceps: 'Pull',
+  Forearms: 'Pull',
+  Core: 'Core',
+};
+
+export const MUSCLE_REGION_ORDER: readonly MuscleRegion[] = ['Lower', 'Push', 'Pull', 'Core'];
 
 export const MAIN_LIFTS = ['Squat', 'Bench Press', 'Deadlift'] as const;
 export type MainLift = typeof MAIN_LIFTS[number];
@@ -16,7 +55,12 @@ export type MainLift = typeof MAIN_LIFTS[number];
 export interface Exercise {
   id: string;
   name: string;
-  muscleGroup: MuscleGroup;
+  /** Muscles this exercise primarily trains. Each contributes 1.0 working set
+   *  toward weekly volume per logged working set. Ordered by emphasis. */
+  primaryMuscles: MuscleGroup[];
+  /** Muscles trained as stabilisers / secondary movers. Displayed but does NOT
+   *  count toward weekly volume — keeps MEV/MAV/MRV bands meaningful. */
+  secondaryMuscles?: MuscleGroup[];
   isMainLift: boolean;
   relatedTo?: MainLift;
 }

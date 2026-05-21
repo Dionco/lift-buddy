@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useTrainingStore } from '@/store/useTrainingStore';
 import { Session, getTopSetE1RM } from '@/types/training';
+import { formatMuscles } from '@/lib/muscleLabels';
 import { ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock, Activity, BarChart3, Dumbbell, X } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar';
 import { cn } from '@/lib/utils';
@@ -243,7 +244,7 @@ export function HistoryTab() {
                         <div className="flex items-center gap-2 mb-1.5">
                           <span className="font-medium text-sm text-foreground">{ex.exercise.name}</span>
                           <span className="text-xs rounded-full bg-secondary px-2 py-0.5 text-secondary-foreground shrink-0">
-                            {ex.exercise.muscleGroup}
+                            {formatMuscles(ex.exercise)}
                           </span>
                           {e1rm > 0 && (
                             <span className="ml-auto text-xs font-semibold text-primary shrink-0">

@@ -1,6 +1,14 @@
+import { useState } from 'react';
 import { useTrainingStore } from '@/store/useTrainingStore';
-import { ExerciseLog, SetLog, Session } from '@/types/training';
-import { ChevronRight } from 'lucide-react';
+import {
+  ExerciseLog,
+  ProgramExercise,
+  Session,
+  SetLog,
+} from '@/types/training';
+import { lastTopSet } from '@/lib/topSet';
+import { fatigueSignal, type FatigueSignal } from '@/lib/progressSignal';
+import { formatMuscles } from '@/lib/muscleLabels';
 
 interface TrainTabProps {
   onStartEmpty: () => void;
@@ -8,251 +16,281 @@ interface TrainTabProps {
   onViewProgram: () => void;
 }
 
-const PHASE_MAP: Record<string, string> = {
-  'General Prep': 'Accumulation',
-  'Volume': 'Hypertrophy',
-  'Intensity': 'Strength',
-  'Max Effort': 'Peaking',
+const PHASE_META: Record<string, { label: string; tone: string }> = {
+  Volume:        { label: 'Accumulation',   tone: 'Build muscle, refine technique, manage fatigue' },
+  Strength:      { label: 'Intensification', tone: 'Heavier loads, lower rep ranges, sharpen output' },
+  Peaking:       { label: 'Realization',    tone: 'Express strength on the competition lifts' },
+  Recovery:      { label: 'Deload',         tone: 'Strategic backoff to dissipate fatigue' },
+  'General Prep':{ label: 'Accumulation',   tone: 'Build muscle, refine technique, manage fatigue' },
+  Intensity:     { label: 'Intensification', tone: 'Heavier loads, lower rep ranges, sharpen output' },
+  'Max Effort':  { label: 'Realization',    tone: 'Express strength on the competition lifts' },
 };
-
-function getPhaseLabel(focus: string): string {
-  return PHASE_MAP[focus] ?? focus;
-}
-
-function getRpeBadgeClass(rpe?: number): string {
-  if (rpe == null) return '';
-  if (rpe >= 9) return 'text-red-700 bg-red-50 ring-1 ring-red-200';
-  if (rpe >= 8) return 'text-amber-700 bg-amber-50 ring-1 ring-amber-200';
-  return 'text-emerald-700 bg-emerald-50 ring-1 ring-emerald-200';
-}
-
-function getLastTopSet(sessions: Session[], exerciseId: string) {
-  for (const session of sessions) {
-    const log = session.exercises.find(e => e.exercise.id === exerciseId);
-    if (!log) continue;
-    const done = log.sets.filter(s => s.completed && s.weight > 0 && s.reps > 0);
-    if (!done.length) continue;
-    return done.reduce((best, s) => s.weight >= best.weight ? s : best, done[0]);
-  }
-  return null;
-}
 
 export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTabProps) {
   const { program, sessions } = useTrainingStore();
-  const currentBlock = program.blocks[program.currentBlockIndex];
-  const currentWeek = currentBlock?.weeks[program.currentWeekIndex];
-  const currentDay = currentWeek?.days[program.currentDayIndex];
+  const [fatigueDismissed, setFatigueDismissed] = useState(false);
+
+  const block = program.blocks[program.currentBlockIndex];
+  const week = block?.weeks[program.currentWeekIndex];
+  const day = week?.days[program.currentDayIndex];
+  if (!block || !week || !day) {
+    return (
+      <div className="train-view">
+        <div className="tv-top">
+          <div className="tv-eyebrow">Lift Buddy</div>
+        </div>
+        <div className="tv-hero">
+          <h1 className="tv-day-name">No active session</h1>
+        </div>
+        <div className="tv-ctas">
+          <button type="button" className="tv-cta-secondary" onClick={onStartEmpty}>
+            Start an empty workout
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const phase = PHASE_META[block.focus] ?? { label: block.focus, tone: '' };
+  const cleanName = day.name.replace(/^Day\s*\d+\s*[—-]\s*/, '');
+  const totalSets = day.exercises.reduce((s, pe) => s + pe.prescription.sets, 0);
+  const mainCount = day.exercises.filter((e) => e.exercise.isMainLift).length;
+  const todaysMain = day.exercises.find((e) => e.exercise.isMainLift);
+  const fatigue = todaysMain ? fatigueSignal(sessions, todaysMain.exercise) : null;
+
+  const dateStr = new Date().toLocaleDateString('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  });
+
+  const mainLifts = day.exercises.filter((pe) => pe.exercise.isMainLift);
+  const accessories = day.exercises.filter((pe) => !pe.exercise.isMainLift);
 
   const handleStartToday = () => {
-    if (!currentBlock || !currentWeek || !currentDay) return;
-    const exercises: ExerciseLog[] = currentDay.exercises.map((pe) => {
+    const exercises: ExerciseLog[] = day.exercises.map((pe) => {
       const sets: SetLog[] = Array.from({ length: pe.prescription.sets }, (_, i) => ({
         id: `preset-${Date.now()}-${i}`,
         weight: 0,
         reps: 0,
-        rpe: pe.prescription.rpeTarget || 7,
+        rpe: pe.prescription.rpeTarget ?? 7,
         timestamp: 0,
         completed: false,
       }));
       return { exercise: pe.exercise, sets };
     });
-    const name = `Week ${currentWeek.weekNumber} · ${currentDay.name}`;
-    onStartToday(exercises, name, currentDay.id);
+    const name = `Week ${week.weekNumber} · ${day.name}`;
+    onStartToday(exercises, name, day.id);
   };
 
-  const phaseLabel = currentBlock ? getPhaseLabel(currentBlock.focus) : '';
-  const totalSets = currentDay?.exercises.reduce((sum, pe) => sum + pe.prescription.sets, 0) ?? 0;
-  // Strip "Day N — " prefix for a cleaner title
-  const dayTitle = currentDay?.name.replace(/^Day\s*\d+\s*[—\-]\s*/, '') ?? '';
-
-  const mainLifts = currentDay?.exercises.filter(pe => pe.exercise.isMainLift) ?? [];
-  const accessories = currentDay?.exercises.filter(pe => !pe.exercise.isMainLift) ?? [];
-
   return (
-    <div className="flex flex-col gap-5 p-5 pb-24">
+    <div className="train-view">
+      <div className="tv-top">
+        <div className="tv-eyebrow">
+          <span className="tv-eyebrow-w">{phase.label}</span>
+          <span className="tv-eyebrow-dot">·</span>
+          <span className="tv-eyebrow-w">Block {program.currentBlockIndex + 1}</span>
+          <span className="tv-eyebrow-dot">·</span>
+          <span className="tv-eyebrow-w">Week {week.weekNumber}</span>
+        </div>
+        <div className="tv-date">{dateStr}</div>
+      </div>
 
-      {/* Page header */}
-      <div className="flex items-baseline justify-between">
-        <h1 className="text-2xl font-black tracking-tight text-foreground">Train</h1>
-        {phaseLabel && (
-          <span className="text-[11px] font-bold uppercase tracking-[0.15em] text-muted-foreground">
-            {phaseLabel} Phase
-          </span>
+      <div className="tv-hero">
+        <div className="tv-day-num">
+          <span className="tv-day-num-label">Day</span>
+          <span className="tv-day-num-val">{program.currentDayIndex + 1}</span>
+          <span className="tv-day-num-of">/ {week.days.length}</span>
+        </div>
+        <h1 className="tv-day-name">{cleanName}</h1>
+        <div className="tv-day-stats">
+          <div className="tv-stat">
+            <div className="tv-stat-num">{day.exercises.length}</div>
+            <div className="tv-stat-label">Exercises</div>
+          </div>
+          <div className="tv-stat-rule" />
+          <div className="tv-stat">
+            <div className="tv-stat-num">{totalSets}</div>
+            <div className="tv-stat-label">Working sets</div>
+          </div>
+          <div className="tv-stat-rule" />
+          <div className="tv-stat">
+            <div className="tv-stat-num">{mainCount}</div>
+            <div className="tv-stat-label">Main {mainCount === 1 ? 'lift' : 'lifts'}</div>
+          </div>
+        </div>
+      </div>
+
+      {fatigue && !fatigueDismissed && (
+        <FatigueBanner signal={fatigue} onDismiss={() => setFatigueDismissed(true)} />
+      )}
+
+      <div className="tv-docket">
+        <div className="tv-docket-head">
+          <span className="tv-docket-eyebrow">Today's Docket</span>
+          <button type="button" className="tv-docket-action" onClick={onViewProgram}>
+            <span>View Program</span>
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+              <path
+                d="M3 2l4 3.5L3 9"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+
+        {mainLifts.length > 0 && (
+          <>
+            <div className="tv-section-rule">
+              <span>Main Lifts</span>
+              <div className="tv-section-line" />
+            </div>
+            {mainLifts.map((pe, i) => (
+              <DocketRow key={pe.exercise.id} pe={pe} sessions={sessions} index={i} isMain />
+            ))}
+          </>
+        )}
+
+        {accessories.length > 0 && (
+          <>
+            <div className="tv-section-rule">
+              <span>Accessories</span>
+              <div className="tv-section-line" />
+            </div>
+            {accessories.map((pe, i) => (
+              <DocketRow
+                key={pe.exercise.id}
+                pe={pe}
+                sessions={sessions}
+                index={mainLifts.length + i}
+                isMain={false}
+              />
+            ))}
+          </>
         )}
       </div>
 
-      {/* Block progression arc */}
-      {currentBlock && (
-        <div className="flex flex-col gap-1.5">
-          <div className="flex gap-1">
-            {program.blocks.map((block, i) => (
-              <div
-                key={block.id}
-                className={`h-[3px] flex-1 rounded-sm transition-colors ${
-                  i < program.currentBlockIndex
-                    ? 'bg-foreground/35'
-                    : i === program.currentBlockIndex
-                    ? 'bg-foreground'
-                    : 'bg-foreground/10'
-                }`}
+      <div className="tv-ctas">
+        <button type="button" className="tv-cta-primary" onClick={handleStartToday}>
+          <span className="tv-cta-label">Start Session</span>
+          <span className="tv-cta-meta">{cleanName}</span>
+        </button>
+        <button type="button" className="tv-cta-secondary" onClick={onStartEmpty}>
+          Start an empty workout
+        </button>
+      </div>
+    </div>
+  );
+}
+
+interface DocketRowProps {
+  pe: ProgramExercise;
+  sessions: Session[];
+  index: number;
+  isMain: boolean;
+}
+
+// Default docket variant: stacked plate bars (one per prescribed set), with the
+// last top-set weight pinned to the right of main lifts.
+function DocketRow({ pe, sessions, index, isMain }: DocketRowProps) {
+  const setBars = Array.from({ length: pe.prescription.sets });
+  const last = isMain ? lastTopSet(sessions, pe.exercise.id) : null;
+  return (
+    <div className={`dr ${isMain ? 'is-main' : ''}`}>
+      <div className="dr-num">{String(index + 1).padStart(2, '0')}</div>
+      <div className="dr-body">
+        <div className="dr-name-row">
+          <span className="dr-name">{pe.exercise.name}</span>
+          <span className="dr-mg">{formatMuscles(pe.exercise)}</span>
+        </div>
+        <div className="dr-plates-row">
+          <div className="dr-plates-bars" aria-hidden>
+            {setBars.map((_, i) => (
+              <i
+                key={i}
+                className="dr-plate-bar"
+                style={{
+                  display: 'block',
+                  width: 5,
+                  height: isMain ? 22 : 18,
+                  background: isMain ? 'var(--accent)' : 'var(--ink)',
+                  borderRadius: 1,
+                  flexShrink: 0,
+                }}
               />
             ))}
           </div>
-          <p className="text-[11px] font-medium text-muted-foreground">
-            Week {currentWeek?.weekNumber ?? 1} of {currentBlock.weeks.length} · {phaseLabel} Phase
-          </p>
-        </div>
-      )}
-
-      {/* Session card */}
-      {currentBlock && currentWeek && currentDay && (
-        <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-
-          {/* Card header: session identity */}
-          <div className="px-4 pt-4 pb-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex-1 min-w-0">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                  Day {program.currentDayIndex + 1} of {currentWeek.days.length}
-                </p>
-                <h2 className="text-[1.1rem] font-bold text-foreground leading-snug mt-0.5 truncate">
-                  {dayTitle}
-                </h2>
-                <p className="text-[11px] text-muted-foreground mt-1">
-                  {currentDay.exercises.length} exercises · {totalSets} sets
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={onViewProgram}
-                className="flex items-center gap-0.5 min-h-[44px] text-[13px] font-medium text-primary flex-shrink-0 -mr-1"
-              >
-                View Program
-                <ChevronRight className="h-3.5 w-3.5" />
-              </button>
-            </div>
-
-            {/* Day progress within block */}
-            <div className="flex gap-1 mt-3">
-              {currentWeek.days.map((_, i) => (
-                <div
-                  key={i}
-                  className={`h-[2px] flex-1 rounded-full ${
-                    i < program.currentDayIndex
-                      ? 'bg-foreground/35'
-                      : i === program.currentDayIndex
-                      ? 'bg-foreground'
-                      : 'bg-foreground/10'
-                  }`}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Main Lifts section */}
-          {mainLifts.length > 0 && (
-            <div className="border-t border-border/60">
-              <div className="px-4 pt-2.5 pb-1">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">
-                  Main Lifts
-                </span>
-              </div>
-              {mainLifts.map((pe) => {
-                const lastSet = getLastTopSet(sessions, pe.exercise.id);
-                const rpeBadgeClass = getRpeBadgeClass(pe.prescription.rpeTarget);
-                return (
-                  <div key={pe.exercise.id} className="flex items-center gap-3 px-4 py-2.5">
-                    {/* Left accent bar */}
-                    <div className="w-[3px] self-stretch rounded-full bg-foreground flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <span className="text-sm font-bold text-foreground block truncate">
-                        {pe.exercise.name}
-                      </span>
-                      {lastSet ? (
-                        <span className="text-[11px] text-muted-foreground">
-                          Last: {lastSet.weight}kg × {lastSet.reps}
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-muted-foreground/40">No history</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <span className="text-sm font-semibold tabular-nums text-foreground">
-                        {pe.prescription.sets}×{pe.prescription.reps}
-                      </span>
-                      {pe.prescription.rpeTarget != null && (
-                        <span className={`text-[11px] font-bold rounded-md px-1.5 py-0.5 ${rpeBadgeClass}`}>
-                          @{pe.prescription.rpeTarget}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          <span className="dr-plates-rx">
+            <span className="dr-rx-sets">{pe.prescription.sets}</span>
+            <span className="dr-plates-of">sets ×</span>
+            <span className="dr-rx-reps">{pe.prescription.reps}</span>
+            {pe.prescription.rpeTarget != null && (
+              <span className="dr-plates-rpe">@{pe.prescription.rpeTarget}</span>
+            )}
+          </span>
+          {isMain && last && (
+            <span className="dr-plates-top">
+              <span className="dr-plates-top-label">top</span>
+              <span className="dr-plates-top-val">
+                {last.weight}
+                <span className="dr-plates-top-unit">kg</span>
+              </span>
+            </span>
           )}
-
-          {/* Accessories section */}
-          {accessories.length > 0 && (
-            <div className="border-t border-border/60">
-              <div className="px-4 pt-2.5 pb-1">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">
-                  Accessories
-                </span>
-              </div>
-              {accessories.map((pe) => {
-                const lastSet = getLastTopSet(sessions, pe.exercise.id);
-                const rpeBadgeClass = getRpeBadgeClass(pe.prescription.rpeTarget);
-                return (
-                  <div key={pe.exercise.id} className="flex items-center gap-3 px-4 py-2">
-                    {/* Spacer to align with main lifts */}
-                    <div className="w-[3px] flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <span className="text-sm font-medium text-foreground/80 block truncate">
-                        {pe.exercise.name}
-                      </span>
-                      {lastSet && (
-                        <span className="text-[11px] text-muted-foreground">
-                          Last: {lastSet.weight}kg × {lastSet.reps}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <span className="text-sm font-medium tabular-nums text-foreground/70">
-                        {pe.prescription.sets}×{pe.prescription.reps}
-                      </span>
-                      {pe.prescription.rpeTarget != null && (
-                        <span className={`text-[11px] font-bold rounded-md px-1.5 py-0.5 ${rpeBadgeClass}`}>
-                          @{pe.prescription.rpeTarget}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Start CTA */}
-          <div className="p-4 pt-3 border-t border-border/60 mt-1">
-            <button
-              type="button"
-              onClick={handleStartToday}
-              className="w-full bg-foreground text-background rounded-xl min-h-[54px] font-bold text-[15px] tracking-tight active:scale-[0.98] transition-transform"
-            >
-              Start {dayTitle}
-            </button>
-          </div>
         </div>
-      )}
+      </div>
+    </div>
+  );
+}
 
-      {/* Start Empty Workout */}
-      <button
-        type="button"
-        onClick={onStartEmpty}
-        className="w-full rounded-xl border border-border bg-background min-h-[50px] text-sm font-semibold text-muted-foreground active:scale-[0.98] transition-transform"
-      >
-        Start Empty Workout
+interface FatigueBannerProps {
+  signal: FatigueSignal;
+  onDismiss: () => void;
+}
+
+function FatigueBanner({ signal, onDismiss }: FatigueBannerProps) {
+  const min = Math.min(...signal.e1rms);
+  const max = Math.max(...signal.e1rms);
+  const range = max - min || 1;
+  return (
+    <div className="fatigue">
+      <div className="fatigue-mark">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M7 1.5v5l3 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      </div>
+      <div className="fatigue-body">
+        <div className="fatigue-head">
+          <span className="fatigue-title">Fatigue signal</span>
+          <span className="fatigue-meta">
+            {signal.exerciseName} · {signal.e1rms.length} sessions
+          </span>
+        </div>
+        <p className="fatigue-text">
+          Top-set e1RM has trended down on {signal.exerciseName} ({signal.delta.toFixed(1)}kg over{' '}
+          {signal.e1rms.length} sessions). Consider a deload — or push through if you've slept and
+          eaten well.
+        </p>
+        <div className="fatigue-spark">
+          {signal.e1rms.map((p, i) => {
+            const h = ((p - min) / range) * 22 + 4;
+            return (
+              <div key={i} className="fs-bar-wrap">
+                <div className="fs-bar" style={{ height: h }} />
+                <div className="fs-val">{p.toFixed(1)}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <button type="button" className="fatigue-x" onClick={onDismiss} aria-label="Dismiss">
+        <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+          <path d="M2 2l7 7M9 2l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
       </button>
     </div>
   );

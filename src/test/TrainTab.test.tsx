@@ -33,11 +33,11 @@ const mockProgram = {
               name: 'Day 1 — Squat',
               exercises: [
                 {
-                  exercise: { id: 'squat', name: 'Squat', muscleGroup: 'Quads', isMainLift: true },
+                  exercise: { id: 'squat', name: 'Squat', primaryMuscles: ['Quads', 'Glutes'], isMainLift: true },
                   prescription: { sets: 5, reps: '5', rpeTarget: 8 },
                 },
                 {
-                  exercise: { id: 'press', name: 'Leg Press', muscleGroup: 'Quads', isMainLift: false },
+                  exercise: { id: 'press', name: 'Leg Press', primaryMuscles: ['Quads', 'Glutes'], isMainLift: false },
                   prescription: { sets: 3, reps: '10-12', rpeTarget: undefined },
                 },
               ],
@@ -63,7 +63,7 @@ const mockStoreNoProgram = {
   sessions: [],
 };
 
-describe('TrainTab', () => {
+describe('TrainTab (editorial-industrial redesign)', () => {
   const onStartEmpty = vi.fn();
   const onStartToday = vi.fn();
   const onViewProgram = vi.fn();
@@ -72,7 +72,7 @@ describe('TrainTab', () => {
     vi.clearAllMocks();
   });
 
-  function renderTab(storeState = mockStoreWithProgram) {
+  function renderTab(storeState: typeof mockStoreWithProgram = mockStoreWithProgram) {
     (useTrainingStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(storeState);
     return render(
       <TrainTab
@@ -83,100 +83,97 @@ describe('TrainTab', () => {
     );
   }
 
-  // --- Layout ---
+  // --- Always-on surfaces ---
 
-  it('renders the Train heading', () => {
+  it('always renders the empty workout button', () => {
     renderTab();
-    expect(screen.getByRole('heading', { name: /train/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /start an empty workout/i })).toBeInTheDocument();
   });
 
-  it('always renders the Start Empty Workout button', () => {
-    renderTab();
-    expect(screen.getByRole('button', { name: /start empty workout/i })).toBeInTheDocument();
-  });
-
-  it('renders Start Empty Workout button even when no program', () => {
+  it('renders empty workout button even when no program', () => {
     renderTab(mockStoreNoProgram);
-    expect(screen.getByRole('button', { name: /start empty workout/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /start an empty workout/i })).toBeInTheDocument();
   });
 
   // --- No-program state ---
 
-  it('does not render session card when currentBlock is undefined', () => {
+  it('does not render hero stats or docket when currentBlock is undefined', () => {
     renderTab(mockStoreNoProgram);
-    expect(screen.queryByText('Test Program')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /start week/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/today's docket/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/working sets/i)).not.toBeInTheDocument();
   });
 
-  // --- Session card: header ---
+  // --- Hero ---
 
-  it('renders the program name as a button in the card header', () => {
+  it('renders the cleaned day name (without "Day N —" prefix) as the hero heading', () => {
     renderTab();
-    expect(screen.getByRole('button', { name: /test program/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^squat$/i })).toBeInTheDocument();
   });
 
-  it('renders the week and day label in the card header', () => {
+  it('renders the block/week eyebrow context', () => {
     renderTab();
-    // Find the span label outside of any button — the CTA button also contains "Week 2" but as part of a longer string
-    const headerLabel = screen.getByText('Week 2 · Day 1 — Squat');
-    expect(headerLabel.tagName).toBe('SPAN');
+    // Phase label "Intensification" maps from focus "Strength"
+    expect(screen.getByText(/intensification/i)).toBeInTheDocument();
+    expect(screen.getByText(/block 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/week 2/i)).toBeInTheDocument();
   });
 
-  // --- Session card: exercise table ---
-
-  it('renders column headers: Exercise, Sets, Reps, RPE', () => {
+  it('renders the hero stat counts', () => {
     renderTab();
-    expect(screen.getByText('Exercise')).toBeInTheDocument();
-    expect(screen.getByText('Sets')).toBeInTheDocument();
-    expect(screen.getByText('Reps')).toBeInTheDocument();
-    expect(screen.getByText('RPE')).toBeInTheDocument();
-  });
-
-  it('renders a row for each exercise with name, sets, reps', () => {
-    renderTab();
-    expect(screen.getByText('Squat')).toBeInTheDocument();
-    expect(screen.getAllByText('5')).toHaveLength(2); // 5 sets and 5 reps for Squat
-    expect(screen.getByText('Leg Press')).toBeInTheDocument();
-    expect(screen.getByText('10-12')).toBeInTheDocument();
-  });
-
-  it('renders RPE target when defined', () => {
-    renderTab();
+    expect(screen.getByText('Exercises')).toBeInTheDocument();
+    expect(screen.getByText('Working sets')).toBeInTheDocument();
+    expect(screen.getByText(/^main lift$/i)).toBeInTheDocument();
+    // 2 exercises, 5 + 3 = 8 sets, 1 main lift
     expect(screen.getByText('8')).toBeInTheDocument();
   });
 
-  it('renders — when rpeTarget is undefined', () => {
+  // --- Docket ---
+
+  it('renders Today\'s Docket sectioned by Main Lifts and Accessories', () => {
     renderTab();
-    const dashCells = screen.getAllByText('—');
-    expect(dashCells.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/today's docket/i)).toBeInTheDocument();
+    expect(screen.getByText('Main Lifts')).toBeInTheDocument();
+    expect(screen.getByText('Accessories')).toBeInTheDocument();
   });
 
-  // --- Session card: CTA button ---
-
-  it('renders CTA button with correct label', () => {
+  it('renders an entry for each exercise with name and prescription', () => {
     renderTab();
-    expect(
-      screen.getByRole('button', { name: /start week 2 · day 1 — squat/i })
-    ).toBeInTheDocument();
+    // Squat appears twice (hero day name + docket row name)
+    expect(screen.getAllByText('Squat').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Leg Press')).toBeInTheDocument();
+    expect(screen.getByText('10-12')).toBeInTheDocument();
+    expect(screen.getByText('@8')).toBeInTheDocument();
+  });
+
+  // --- CTAs ---
+
+  it('renders the primary CTA with the cleaned day name', () => {
+    renderTab();
+    expect(screen.getByRole('button', { name: /start session\s*squat/i })).toBeInTheDocument();
+  });
+
+  it('renders the View Program action', () => {
+    renderTab();
+    expect(screen.getByRole('button', { name: /view program/i })).toBeInTheDocument();
   });
 
   // --- Interactions ---
 
-  it('calls onViewProgram when program name is clicked', async () => {
+  it('calls onViewProgram when View Program is clicked', async () => {
     renderTab();
-    await userEvent.click(screen.getByRole('button', { name: /test program/i }));
+    await userEvent.click(screen.getByRole('button', { name: /view program/i }));
     expect(onViewProgram).toHaveBeenCalledOnce();
   });
 
-  it('calls onStartEmpty when Start Empty Workout is clicked', async () => {
+  it('calls onStartEmpty when the empty workout button is clicked', async () => {
     renderTab();
-    await userEvent.click(screen.getByRole('button', { name: /start empty workout/i }));
+    await userEvent.click(screen.getByRole('button', { name: /start an empty workout/i }));
     expect(onStartEmpty).toHaveBeenCalledOnce();
   });
 
-  it('calls onStartToday with correct arguments when CTA is clicked', async () => {
+  it('calls onStartToday with correct arguments when the primary CTA is clicked', async () => {
     renderTab();
-    await userEvent.click(screen.getByRole('button', { name: /start week 2 · day 1 — squat/i }));
+    await userEvent.click(screen.getByRole('button', { name: /start session\s*squat/i }));
     expect(onStartToday).toHaveBeenCalledOnce();
     const [exercises, name, dayId] = onStartToday.mock.calls[0];
     expect(name).toBe('Week 2 · Day 1 — Squat');

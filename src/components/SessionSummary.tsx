@@ -1,11 +1,14 @@
 import { useState, useMemo } from 'react';
 import {
   Session,
-  Program,
-  ProgramDay,
   diffSessionAgainstDay,
   getTopSetE1RM,
 } from '@/types/training';
+import {
+  findDayById,
+  computeBlockBoundaryChoice,
+  type BlockBoundaryChoice,
+} from '@/lib/programCursor';
 import { useTrainingStore } from '@/store/useTrainingStore';
 import { Textarea } from '@/components/ui/textarea';
 import { Clock, BarChart3, Activity, Trophy, AlertCircle, Plus } from 'lucide-react';
@@ -20,29 +23,7 @@ interface SessionSummaryProps {
   onClose: () => void;
 }
 
-interface ProgramDayLocation {
-  day: ProgramDay;
-  blockIndex: number;
-  weekIndex: number;
-  dayIndex: number;
-}
-
-function findProgramDay(program: Program, dayId: string): ProgramDayLocation | null {
-  for (let bi = 0; bi < program.blocks.length; bi++) {
-    const block = program.blocks[bi];
-    for (let wi = 0; wi < block.weeks.length; wi++) {
-      const week = block.weeks[wi];
-      for (let di = 0; di < week.days.length; di++) {
-        if (week.days[di].id === dayId) {
-          return { day: week.days[di], blockIndex: bi, weekIndex: wi, dayIndex: di };
-        }
-      }
-    }
-  }
-  return null;
-}
-
-type EndOfBlockChoice = 'advance' | 'repeat' | 'deload' | null;
+type EndOfBlockChoice = BlockBoundaryChoice | null;
 
 export function SessionSummary({ session, onClose }: SessionSummaryProps) {
   const program = useTrainingStore((s) => s.program);
@@ -54,7 +35,7 @@ export function SessionSummary({ session, onClose }: SessionSummaryProps) {
   const [endOfBlockOpen, setEndOfBlockOpen] = useState(false);
 
   const programDayLocation = useMemo(
-    () => (session.programDayId ? findProgramDay(program, session.programDayId) : null),
+    () => (session.programDayId ? findDayById(program, session.programDayId) : null),
     [program, session.programDayId]
   );
 
@@ -105,28 +86,15 @@ export function SessionSummary({ session, onClose }: SessionSummaryProps) {
   };
 
   const handleEndOfBlockChoice = (choice: EndOfBlockChoice) => {
-    if (!programDayLocation) {
+    if (!programDayLocation || !choice) {
+      setEndOfBlockOpen(false);
       onClose();
       return;
     }
-    const { blockIndex, weekIndex } = programDayLocation;
-
-    if (choice === 'advance') {
-      // Move to first day of first week of next block.
-      const nextBlock = blockIndex + 1;
-      if (nextBlock < program.blocks.length) {
-        setProgramCursor(nextBlock, 0, 0);
-      }
-    } else if (choice === 'repeat') {
-      // Restart at the first day of the first week of the same block.
-      setProgramCursor(blockIndex, 0, 0);
-    } else if (choice === 'deload') {
-      // Stay on the current block; restart at week 0 day 0 with the lifter expected
-      // to manually adjust load. We don't model deload as data here (per ADR-0002 spirit:
-      // we don't auto-apply training adjustments). The lifter knows what to do.
-      setProgramCursor(blockIndex, weekIndex, 0);
+    const next = computeBlockBoundaryChoice(program, programDayLocation, choice);
+    if (next) {
+      setProgramCursor(next.blockIndex, next.weekIndex, next.dayIndex);
     }
-    // 'jump' would open a picker — out of scope for this phase. For now treat as no-op.
     setEndOfBlockOpen(false);
     onClose();
   };

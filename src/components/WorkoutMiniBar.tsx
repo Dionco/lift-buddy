@@ -1,4 +1,15 @@
+import { useState } from "react";
 import { useElapsedTime } from "@/hooks/useElapsedTime";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface WorkoutMiniBarProps {
   workoutName: string | undefined;
@@ -9,99 +20,60 @@ interface WorkoutMiniBarProps {
 
 export function WorkoutMiniBar({ workoutName, startTime, onResume, onCancel }: WorkoutMiniBarProps) {
   const elapsed = useElapsedTime(startTime);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const cleanName =
+    workoutName?.replace(/^Week\s*\d+\s*[·-]\s*Day\s*\d+\s*[—-]\s*/, '') ?? workoutName ?? 'Workout';
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        bottom: 64,
-        left: 0,
-        right: 0,
-        zIndex: 49,
-        background: "#FFFFFF",
-        borderTop: "0.5px solid #D3D1C7",
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "0 16px",
-        height: 52,
-        paddingBottom: "env(safe-area-inset-bottom)",
-      }}
-    >
-      {/* Dumbbell icon */}
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, color: "#7F77DD" }}>
-        <rect x="1" y="7" width="3" height="2" rx="0.5" fill="currentColor" />
-        <rect x="12" y="7" width="3" height="2" rx="0.5" fill="currentColor" />
-        <rect x="3" y="5.5" width="2" height="5" rx="0.5" fill="currentColor" />
-        <rect x="11" y="5.5" width="2" height="5" rx="0.5" fill="currentColor" />
-        <rect x="5" y="7.5" width="6" height="1" rx="0.5" fill="currentColor" />
-      </svg>
+    <>
+      <div className="lb-mini-bar" role="status" aria-label="Active session">
+        <span className="lb-mini-dot" aria-hidden />
+        <div className="lb-mini-body">
+          <div className="lb-mini-eyebrow">
+            <span>In session</span>
+            <span className="lb-mini-eyebrow-dot">·</span>
+            <span className="lb-mini-time">{elapsed}</span>
+          </div>
+          <span className="lb-mini-name">{cleanName}</span>
+        </div>
+        <button type="button" className="lb-mini-resume" onClick={onResume}>
+          Resume
+        </button>
+        <button
+          type="button"
+          className="lb-mini-x"
+          onClick={() => setConfirmOpen(true)}
+          aria-label="Cancel workout"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
 
-      {/* Workout name */}
-      <span
-        style={{
-          flex: 1,
-          fontSize: 13,
-          fontWeight: 600,
-          color: "#2C2C2A",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {workoutName ?? "Workout"}
-      </span>
-
-      {/* Elapsed time */}
-      <span
-        style={{
-          fontSize: 13,
-          fontWeight: 500,
-          color: "#888780",
-          flexShrink: 0,
-          marginRight: 8,
-        }}
-      >
-        {elapsed}
-      </span>
-
-      {/* Resume button */}
-      <button
-        onClick={onResume}
-        style={{
-          background: "#7F77DD",
-          color: "white",
-          border: "none",
-          borderRadius: 16,
-          padding: "6px 14px",
-          fontSize: 13,
-          fontWeight: 500,
-          cursor: "pointer",
-          flexShrink: 0,
-        }}
-      >
-        Resume
-      </button>
-
-      {/* Cancel (X) button */}
-      <button
-        onClick={onCancel}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 6,
-          cursor: "pointer",
-          color: "#888780",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flexShrink: 0,
-        }}
-      >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
-      </button>
-    </div>
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel this workout?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {cleanName} is in progress for {elapsed}. Cancelling discards all logged sets — this
+              cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep training</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmOpen(false);
+                onCancel();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Discard workout
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

@@ -1,22 +1,33 @@
 import { useMemo, useState } from 'react';
 import { useTrainingStore } from '@/store/useTrainingStore';
-import { MAIN_LIFTS, getTopSetE1RM } from '@/types/training';
+import { MAIN_LIFTS, getTopSetE1RM, MuscleGroup, MUSCLE_REGION, MUSCLE_REGION_ORDER, MuscleRegion } from '@/types/training';
+import { fatigueSignal } from '@/lib/progressSignal';
+import {
+  computeWeeklyVolume,
+  computePlannedWeeklyVolume,
+  classifyVolume,
+  VOLUME_LANDMARKS,
+  type VolumeStatus,
+} from '@/lib/volume';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
 import { ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-const VOLUME_TARGETS: Record<string, [number, number]> = {
-  Quads: [8, 15],
-  Glutes: [8, 15],
-  Chest: [10, 20],
-  Triceps: [10, 20],
-  'Posterior Chain': [6, 12],
-  Hamstrings: [6, 12],
+const VOLUME_BAR_COLOR: Record<VolumeStatus, string> = {
+  'below-mev': 'bg-muted-foreground/30',
+  'in-mav': 'bg-success',
+  'near-mrv': 'bg-success',
+  'over-mrv': 'bg-warning',
+  unknown: 'bg-primary',
 };
 
 export function ProgressTab() {
-  const { sessions } = useTrainingStore();
+  const { sessions, program } = useTrainingStore();
   const [weekOffset, setWeekOffset] = useState(0);
+
+  // Planned volume from the program's current cursor — what the lifter
+  // intends to do this week, independent of what's been logged so far.
+  const plannedVolume = useMemo(() => computePlannedWeeklyVolume(program), [program]);
 
   // e1RM trends
   const e1rmData = useMemo(() => {
@@ -41,65 +52,47 @@ export function ProgressTab() {
     return data;
   }, [sessions]);
 
-  // Fatigue flags
+  // Fatigue flags — single rule lives in `lib/progressSignal#fatigueSignal`.
   const fatigueFlags = useMemo(() => {
     const flags: Record<string, boolean> = {};
     for (const lift of MAIN_LIFTS) {
-      const pts = e1rmData[lift];
-      if (pts.length >= 3) {
-        const last3 = pts.slice(-3);
-        flags[lift] = last3[1].e1rm < last3[0].e1rm && last3[2].e1rm < last3[1].e1rm;
-      } else {
-        flags[lift] = false;
+      // Find any logged Exercise object matching this main-lift name.
+      let exercise: { id: string; name: string } | undefined;
+      for (const s of sessions) {
+        const match = s.exercises.find((e) => e.exercise.name === lift);
+        if (match) {
+          exercise = match.exercise;
+          break;
+        }
       }
+      flags[lift] = exercise
+        ? fatigueSignal(sessions, exercise as Parameters<typeof fatigueSignal>[1]) !== null
+        : false;
     }
     return flags;
-  }, [e1rmData]);
+  }, [sessions]);
 
-  // Weekly volume
+  // Weekly volume — domain rule lives in `lib/volume`.
   const weekData = useMemo(() => {
-    const now = new Date();
-    const currentMonday = new Date(now);
-    currentMonday.setDate(now.getDate() - ((now.getDay() + 6) % 7) + weekOffset * 7);
-    currentMonday.setHours(0, 0, 0, 0);
-    const sunday = new Date(currentMonday);
-    sunday.setDate(currentMonday.getDate() + 6);
-    sunday.setHours(23, 59, 59, 999);
-
-    const weekSessions = sessions.filter(
-      (s) => s.startTime >= currentMonday.getTime() && s.startTime <= sunday.getTime()
-    );
-
-    const muscleVolume: Record<string, number> = {};
-    let totalKg = 0;
+    const volume = computeWeeklyVolume(sessions, { weekOffset });
+    // Avg-RPE-per-day is a separate concern from working-set volume; computed inline.
     const dayRpes: Record<string, number[]> = {};
-
-    for (const session of weekSessions) {
+    for (const session of sessions) {
+      if (session.startTime < volume.start.getTime() || session.startTime > volume.end.getTime()) continue;
       const dayKey = new Date(session.startTime).toLocaleDateString('en-GB', { weekday: 'short' });
       for (const ex of session.exercises) {
-        const completed = ex.sets.filter((s) => s.completed);
-        const group = ex.exercise.muscleGroup;
-        muscleVolume[group] = (muscleVolume[group] || 0) + completed.length;
-        for (const set of completed) {
-          totalKg += set.weight * set.reps;
+        for (const set of ex.sets) {
+          if (!set.completed) continue;
           if (!dayRpes[dayKey]) dayRpes[dayKey] = [];
           dayRpes[dayKey].push(set.rpe);
         }
       }
     }
-
     const rpeByDay = Object.entries(dayRpes).map(([day, rpes]) => ({
       day,
       avgRpe: +(rpes.reduce((a, b) => a + b, 0) / rpes.length).toFixed(1),
     }));
-
-    return {
-      start: currentMonday,
-      end: sunday,
-      muscleVolume,
-      totalKg: Math.round(totalKg),
-      rpeByDay,
-    };
+    return { ...volume, rpeByDay };
   }, [sessions, weekOffset]);
 
   const formatWeek = (d: Date) =>
@@ -162,37 +155,58 @@ export function ProgressTab() {
         </div>
 
         <div className="rounded-xl border border-border bg-card p-4">
-          <div className="flex flex-col gap-3">
-            {Object.entries(weekData.muscleVolume).map(([group, sets]) => {
-              const target = VOLUME_TARGETS[group];
-              let color: string;
-              if (!target) color = 'bg-primary';
-              else if (sets < target[0]) color = 'bg-muted-foreground/30';
-              else if (sets > target[1]) color = 'bg-warning';
-              else color = 'bg-success';
+          {(() => {
+            const allGroups = Object.keys(VOLUME_LANDMARKS) as MuscleGroup[];
+            // Show every muscle that has logged sets, has planned sets this
+            // week, OR has a non-zero MEV to flag. Collapse the truly idle
+            // (sets=0, planned=0, mev=0) into the "Untrained" footer.
+            const visible: MuscleGroup[] = [];
+            const collapsed: MuscleGroup[] = [];
+            for (const g of allGroups) {
+              const done = weekData.perMuscleGroup[g] ?? 0;
+              const planned = plannedVolume[g] ?? 0;
+              const mev = VOLUME_LANDMARKS[g]?.mev ?? 0;
+              if (done > 0 || planned > 0 || mev > 0) visible.push(g);
+              else collapsed.push(g);
+            }
+            const byRegion: Record<MuscleRegion, MuscleGroup[]> = { Lower: [], Push: [], Pull: [], Core: [] };
+            for (const g of visible) byRegion[MUSCLE_REGION[g]].push(g);
+            for (const region of MUSCLE_REGION_ORDER) byRegion[region].sort();
 
-              return (
-                <div key={group}>
-                  <div className="flex items-center justify-between text-sm mb-1">
-                    <span className="text-foreground">{group}</span>
-                    <span className="text-muted-foreground tabular-nums">
-                      {sets} sets
-                      {target && <span className="ml-1 text-xs">({target[0]}-{target[1]})</span>}
-                    </span>
+            if (visible.length === 0) {
+              return <p className="text-sm text-muted-foreground text-center py-4">No data this week</p>;
+            }
+
+            return (
+              <div className="flex flex-col gap-4">
+                <VolumeBarLegend />
+                {MUSCLE_REGION_ORDER.map((region) => {
+                  const groups = byRegion[region];
+                  if (groups.length === 0) return null;
+                  return (
+                    <div key={region} className="flex flex-col gap-3.5">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70 pb-1 border-b border-border/50">
+                        {region}
+                      </div>
+                      {groups.map((group) => (
+                        <VolumeBar
+                          key={group}
+                          group={group}
+                          done={weekData.perMuscleGroup[group] ?? 0}
+                          planned={plannedVolume[group] ?? 0}
+                        />
+                      ))}
+                    </div>
+                  );
+                })}
+                {collapsed.length > 0 && (
+                  <div className="text-xs text-muted-foreground/70 italic pt-1">
+                    Untrained ({collapsed.length}): {collapsed.join(', ')}
                   </div>
-                  <div className="h-3 rounded-full bg-secondary overflow-hidden">
-                    <div
-                      className={cn('h-full rounded-full transition-all', color)}
-                      style={{ width: `${Math.min(100, (sets / (target?.[1] || 20)) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-            {Object.keys(weekData.muscleVolume).length === 0 && (
-              <p className="text-sm text-muted-foreground text-center py-4">No data this week</p>
-            )}
-          </div>
+                )}
+              </div>
+            );
+          })()}
 
           <div className="mt-4 pt-4 border-t border-border flex items-center justify-between">
             <span className="text-sm text-muted-foreground">Total Volume</span>
@@ -217,6 +231,136 @@ export function ProgressTab() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Single muscle-group row: name + done/planned counts, a stacked bar with
+ * MEV / MAV / MRV markers, and a "planned" indicator above the bar.
+ *
+ * Bar layout (0 → ceiling, ceiling = MRV * 1.15 so over-MRV still has room
+ * to draw past the MRV tick):
+ *   - empty rail bg-secondary
+ *   - filled = done sets, coloured by VolumeStatus
+ *   - vertical ticks at MEV / MAV / MRV
+ *   - small triangle marker above bar at the planned-sets position
+ */
+function VolumeBar({ group, done, planned }: { group: MuscleGroup; done: number; planned: number }) {
+  const landmarks = VOLUME_LANDMARKS[group];
+  const status = classifyVolume(done, landmarks);
+  // Rail extends past MRV so over-MRV bars and any planned-marker beyond MRV
+  // are visible. If no landmarks, fall back to a fixed ceiling.
+  const mrv = landmarks?.mrv ?? 20;
+  const ceiling = Math.max(mrv * 1.15, done, planned, mrv + 2);
+  const pct = (n: number) => `${Math.min(100, Math.max(0, (n / ceiling) * 100))}%`;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between text-sm mb-1.5">
+        <span className="text-foreground font-medium">{group}</span>
+        <span className="text-muted-foreground tabular-nums text-xs">
+          <span className="text-foreground font-semibold">{done}</span>
+          <span className="opacity-50"> / </span>
+          <span>{planned}</span>
+          <span className="opacity-60"> planned</span>
+        </span>
+      </div>
+
+      {/* Planned marker rail (slim, sits above the bar) */}
+      <div className="relative h-2 mb-0.5">
+        {planned > 0 && (
+          <div
+            className="absolute -top-px"
+            style={{ left: pct(planned), transform: 'translateX(-50%)' }}
+            title={`Planned: ${planned} sets`}
+            aria-label={`Planned ${planned} sets`}
+          >
+            <svg width="10" height="8" viewBox="0 0 10 8" className="text-primary">
+              <path d="M5 8 L0 0 L10 0 Z" fill="currentColor" />
+            </svg>
+          </div>
+        )}
+      </div>
+
+      {/* Main bar */}
+      <div className="relative h-3 rounded-full bg-secondary overflow-hidden">
+        <div
+          className={cn('absolute left-0 top-0 h-full rounded-full transition-all', VOLUME_BAR_COLOR[status])}
+          style={{ width: pct(done) }}
+        />
+        {landmarks && landmarks.mev > 0 && (
+          <div
+            className="absolute top-0 bottom-0 w-px bg-foreground/40"
+            style={{ left: pct(landmarks.mev) }}
+            aria-hidden
+          />
+        )}
+        {landmarks && (
+          <div
+            className="absolute top-[-2px] bottom-[-2px] w-[2px] bg-foreground"
+            style={{ left: pct(landmarks.mav), transform: 'translateX(-1px)' }}
+            aria-hidden
+          />
+        )}
+        {landmarks && (
+          <div
+            className="absolute top-0 bottom-0 w-px bg-warning"
+            style={{ left: pct(landmarks.mrv) }}
+            aria-hidden
+          />
+        )}
+      </div>
+
+      {/* Tick scale below bar */}
+      {landmarks && (
+        <div className="relative h-3 mt-0.5 text-[9px] text-muted-foreground/80 tabular-nums">
+          {landmarks.mev > 0 && (
+            <span
+              className="absolute"
+              style={{ left: pct(landmarks.mev), transform: 'translateX(-50%)' }}
+            >
+              {landmarks.mev}
+            </span>
+          )}
+          <span
+            className="absolute font-semibold text-foreground/80"
+            style={{ left: pct(landmarks.mav), transform: 'translateX(-50%)' }}
+          >
+            {landmarks.mav}
+          </span>
+          <span
+            className="absolute"
+            style={{ left: pct(landmarks.mrv), transform: 'translateX(-50%)' }}
+          >
+            {landmarks.mrv}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VolumeBarLegend() {
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/80 pb-1">
+      <span className="flex items-center gap-1.5">
+        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-success" /> Done
+      </span>
+      <span className="flex items-center gap-1.5">
+        <svg width="10" height="8" viewBox="0 0 10 8" className="text-primary">
+          <path d="M5 8 L0 0 L10 0 Z" fill="currentColor" />
+        </svg>
+        Planned
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="inline-block w-px h-3 bg-foreground/40" /> MEV
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="inline-block w-[2px] h-3 bg-foreground" /> MAV (target)
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="inline-block w-px h-3 bg-warning" /> MRV
+      </span>
     </div>
   );
 }

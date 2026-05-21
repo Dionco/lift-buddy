@@ -112,7 +112,9 @@ The standard accessory progress rule: pick a rep range (e.g. 8–12). Each sessi
 A new all-time-high top-set **e1RM** for an exercise (any rep range). Celebratory; surfaced in the Session Summary as a flourish. Independent of the **Progress Signal** — a PR is a moment, the slope is a trend. Tracked for every exercise but rep-range caveats apply (a 10-rep PR and a 3-rep PR are different milestones).
 
 **Volume**:
-Sum of working sets per muscle group per week, where a working set is `RPE ≥ 7` (warmups excluded). Not the canonical progress signal — instead, a recoverability metric measured against **MEV / MAV / MRV** landmarks per muscle group. Compound lifts contribute to multiple muscle groups (a Squat working set counts toward both Quads and Glutes).
+Sum of working sets per muscle group per week, where a working set is `RPE ≥ 7` (warmups excluded). Not the canonical progress signal — instead, a recoverability metric measured against **MEV / MAV / MRV** landmarks per muscle group. Compound lifts contribute to **each of their primary muscles** (a Squat working set counts toward both Quads and Glutes; a Bench working set counts toward Chest, Front Delts, and Triceps). Secondary muscles — stabilisers and supporting movers — are displayed on the exercise but do **not** count toward weekly volume; the band thresholds are calibrated against direct/primary stimulus only.
+
+The tracked muscle taxonomy is per-muscle (Quads, Glutes, Hamstrings, Adductors, Calves, Spinal Erectors, Chest, Front Delts, Side Delts, Triceps, Lats, Upper Back, Traps, Rear Delts, Biceps, Forearms, Core) — not composite groups like "Shoulders" or "Posterior Chain". Each deltoid head and each posterior-chain muscle gets its own MEV/MAV/MRV row because their recovery profiles diverge.
 
 **MEV / MAV / MRV** (Volume Landmarks):
 Per muscle group thresholds, per Mike Israetel:

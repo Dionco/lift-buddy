@@ -2,7 +2,8 @@
 import { useState, useMemo, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { EXERCISES } from "@/data/sampleProgram";
-import { Exercise, MuscleGroup, Session } from "@/types/training";
+import { Exercise, MuscleGroup, MuscleRegion, MUSCLE_REGION, MUSCLE_REGION_ORDER, Session } from "@/types/training";
+import { formatMuscles } from "@/lib/muscleLabels";
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -21,22 +22,37 @@ export function computeUsageCounts(sessions: Session[]): Record<string, number> 
 
 const ALL_EXERCISES = Object.values(EXERCISES);
 
-const MUSCLE_GROUPS: MuscleGroup[] = Array.from(
-  new Set(ALL_EXERCISES.map((e) => e.muscleGroup))
-).sort() as MuscleGroup[];
+// Muscle groups represented in the catalogue, sectioned by region for the
+// horizontally-scrollable filter chip rail.
+const MUSCLE_GROUPS_BY_REGION: ReadonlyArray<{ region: MuscleRegion; muscles: MuscleGroup[] }> =
+  (() => {
+    const present = new Set<MuscleGroup>();
+    for (const ex of ALL_EXERCISES) {
+      for (const m of ex.primaryMuscles) present.add(m);
+    }
+    return MUSCLE_REGION_ORDER.map((region) => ({
+      region,
+      muscles: Array.from(present)
+        .filter((m) => MUSCLE_REGION[m] === region)
+        .sort(),
+    })).filter((section) => section.muscles.length > 0);
+  })();
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface AddExerciseSheetProps {
   visible: boolean;
   sessions: Session[];
+  /** Exercise ids already present in the active workout — hidden from the catalogue. */
+  existingIds?: readonly string[];
   onClose: () => void;
   onAdd: (exercises: Exercise[]) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function AddExerciseSheet({ visible, sessions, onClose, onAdd }: AddExerciseSheetProps) {
+export function AddExerciseSheet({ visible, sessions, existingIds, onClose, onAdd }: AddExerciseSheetProps) {
+  const existingSet = useMemo(() => new Set(existingIds ?? []), [existingIds]);
   const [query, setQuery] = useState("");
   const [muscleFilter, setMuscleFilter] = useState<MuscleGroup | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -56,12 +72,13 @@ export function AddExerciseSheet({ visible, sessions, onClose, onAdd }: AddExerc
     const q = query.toLowerCase();
     return ALL_EXERCISES
       .filter((ex) => {
+        if (existingSet.has(ex.id)) return false;
         const matchesQuery = ex.name.toLowerCase().includes(q);
-        const matchesMuscle = muscleFilter === null || ex.muscleGroup === muscleFilter;
+        const matchesMuscle = muscleFilter === null || ex.primaryMuscles.includes(muscleFilter);
         return matchesQuery && matchesMuscle;
       })
       .sort((a, b) => (usageCounts[b.id] ?? 0) - (usageCounts[a.id] ?? 0));
-  }, [query, muscleFilter, usageCounts]);
+  }, [query, muscleFilter, usageCounts, existingSet]);
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -76,298 +93,141 @@ export function AddExerciseSheet({ visible, sessions, onClose, onAdd }: AddExerc
     onAdd(ALL_EXERCISES.filter((ex) => selected.has(ex.id)));
   };
 
-  const addLabel = selected.size > 0 ? `Add Exercises (${selected.size})` : "Add Exercises";
+  const sectionLabel = query || muscleFilter ? "Results" : "Recent Exercises";
 
   return createPortal(
     <>
-      {/* Backdrop */}
       <div
         data-testid="exercise-sheet-backdrop"
         onClick={onClose}
+        className="aes-backdrop"
         style={{
-          position: "fixed",
-          inset: 0,
-          background: "rgba(0,0,0,0.4)",
-          zIndex: 79,
           opacity: visible ? 1 : 0,
           pointerEvents: visible ? "auto" : "none",
-          transition: "opacity 0.22s cubic-bezier(0.4,0,0.2,1)",
         }}
       />
 
-      {/* Sheet */}
       <div
-        style={{
-          position: "fixed",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: "85vh",
-          background: "#FFFFFF",
-          borderRadius: "16px 16px 0 0",
-          zIndex: 80,
-          transform: visible ? "translateY(0)" : "translateY(100%)",
-          transition: "transform 0.22s cubic-bezier(0.4,0,0.2,1)",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
+        className="aes-sheet"
+        style={{ transform: visible ? "translateY(0)" : "translateY(100%)" }}
+        role="dialog"
+        aria-label="Exercises"
       >
-        {/* Header */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "16px 16px 12px",
-            borderBottom: "0.5px solid #D3D1C7",
-            flexShrink: 0,
-          }}
-        >
-          <button
-            aria-label="Close"
-            onClick={onClose}
-            style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              color: "#888780",
-              fontSize: 22,
-              lineHeight: 1,
-              padding: 4,
-              width: 28,
-            }}
-          >
-            ×
+        <div className="aes-grab" aria-hidden />
+
+        <div className="aes-head">
+          <div className="aes-head-title">
+            <div className="aes-eyebrow">Catalogue</div>
+            <h2 className="aes-title">Exercises</h2>
+          </div>
+          <button type="button" aria-label="Close" className="aes-close" onClick={onClose}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
           </button>
-          <span style={{ fontSize: 16, fontWeight: 600, color: "#2C2C2A" }}>Exercises</span>
-          <div style={{ width: 28 }} />
         </div>
 
-        {/* Search */}
-        <div style={{ padding: "12px 16px 0", flexShrink: 0 }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              background: "#F1EFE8",
-              border: "0.5px solid #D3D1C7",
-              borderRadius: 10,
-              padding: "9px 12px",
-            }}
-          >
+        <div className="aes-search-wrap">
+          <div className="aes-search">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <circle cx="6" cy="6" r="4.5" stroke="#888780" strokeWidth="1.5" />
-              <path d="M9.5 9.5l2.5 2.5" stroke="#888780" strokeWidth="1.5" strokeLinecap="round" />
+              <circle cx="6" cy="6" r="4.5" stroke="var(--muted)" strokeWidth="1.4" />
+              <path d="M9.5 9.5l2.5 2.5" stroke="var(--muted)" strokeWidth="1.4" strokeLinecap="round" />
             </svg>
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search exercise name"
-              style={{
-                flex: 1,
-                background: "none",
-                border: "none",
-                outline: "none",
-                fontSize: 14,
-                color: "#2C2C2A",
-              }}
             />
           </div>
         </div>
 
-        {/* Muscle group filter pills */}
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            padding: "10px 16px",
-            overflowX: "auto",
-            flexShrink: 0,
-            scrollbarWidth: "none",
-          }}
-        >
+        <div className="aes-pills" role="tablist">
           <button
+            type="button"
+            className={`aes-pill ${muscleFilter === null ? "is-active" : ""}`}
             onClick={() => setMuscleFilter(null)}
-            style={{
-              flexShrink: 0,
-              padding: "5px 12px",
-              borderRadius: 20,
-              border: "0.5px solid #D3D1C7",
-              background: muscleFilter === null ? "#7F77DD" : "#F1EFE8",
-              color: muscleFilter === null ? "white" : "#5F5E5A",
-              fontSize: 12,
-              fontWeight: 500,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
           >
             All
           </button>
-          {MUSCLE_GROUPS.map((mg) => (
-            <button
-              key={mg}
-              onClick={() => setMuscleFilter(muscleFilter === mg ? null : mg)}
-              style={{
-                flexShrink: 0,
-                padding: "5px 12px",
-                borderRadius: 20,
-                border: "0.5px solid #D3D1C7",
-                background: muscleFilter === mg ? "#7F77DD" : "#F1EFE8",
-                color: muscleFilter === mg ? "white" : "#5F5E5A",
-                fontSize: 12,
-                fontWeight: 500,
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {mg}
-            </button>
+          {MUSCLE_GROUPS_BY_REGION.map((section, sIdx) => (
+            <span key={section.region} className="aes-pill-group">
+              {sIdx > 0 && <span className="aes-pill-divider" aria-hidden />}
+              <span className="aes-pill-region">{section.region}</span>
+              {section.muscles.map((mg) => (
+                <button
+                  key={mg}
+                  type="button"
+                  className={`aes-pill ${muscleFilter === mg ? "is-active" : ""}`}
+                  onClick={() => setMuscleFilter(muscleFilter === mg ? null : mg)}
+                >
+                  {mg}
+                </button>
+              ))}
+            </span>
           ))}
         </div>
 
-        {/* Exercise list */}
-        <div
-          style={{
-            flex: 1,
-            minHeight: 0,
-            overflowY: "auto",
-            padding: "0 16px",
-          }}
-        >
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: "#888780",
-              textTransform: "uppercase",
-              letterSpacing: "0.04em",
-              padding: "8px 0 4px",
-            }}
-          >
-            {query || muscleFilter ? "Results" : "Recent Exercises"}
+        <div className="aes-list">
+          <div className="aes-section-rule">
+            <span>{sectionLabel}</span>
+            <div className="aes-section-line" />
           </div>
 
-          {filteredExercises.map((ex) => {
+          {filteredExercises.map((ex, i) => {
             const isSelected = selected.has(ex.id);
             const count = usageCounts[ex.id] ?? 0;
             return (
-              <div
+              <button
+                type="button"
                 key={ex.id}
                 onClick={() => toggleSelect(ex.id)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "12px 8px",
-                  borderBottom: "0.5px solid #F1EFE8",
-                  background: isSelected ? "#F3F2FD" : "transparent",
-                  cursor: "pointer",
-                  borderRadius: 8,
-                  transition: "background 0.15s",
-                }}
+                className={`aes-row ${isSelected ? "is-selected" : ""}`}
+                aria-pressed={isSelected}
               >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "#2C2C2A" }}>
+                <span className="aes-row-num">{String(i + 1).padStart(2, "0")}</span>
+                <span className="aes-row-body">
+                  <span className="aes-row-name">
                     {ex.name}
-                  </div>
-                  <div style={{ fontSize: 12, color: "#888780", marginTop: 1 }}>
-                    {ex.muscleGroup}
-                  </div>
-                </div>
-                <div style={{ fontSize: 12, color: "#888780", flexShrink: 0, marginRight: 8 }}>
+                    {ex.isMainLift && <span className="aes-row-main" title="Main Lift">●</span>}
+                  </span>
+                  <span className="aes-row-mg">{formatMuscles(ex)}</span>
+                </span>
+                <span className="aes-row-uses">
                   {count > 0 ? `${count} ${count === 1 ? "time" : "times"}` : "—"}
-                </div>
-                {/* Inline checkbox — matches SetCheckbox visual style */}
-                <div
-                  style={{
-                    width: 22,
-                    height: 22,
-                    borderRadius: "50%",
-                    border: isSelected ? "1.5px solid #7F77DD" : "1.5px solid #B4B2A9",
-                    background: isSelected ? "#7F77DD" : "transparent",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                    transition: "all 0.15s",
-                  }}
-                >
+                </span>
+                <span className="aes-check" aria-hidden>
                   {isSelected && (
                     <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
                       <path
                         d="M2 5.5l2.5 2.5 4.5-4.5"
-                        stroke="white"
-                        strokeWidth="2"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       />
                     </svg>
                   )}
-                </div>
-              </div>
+                </span>
+              </button>
             );
           })}
 
           {filteredExercises.length === 0 && (
-            <div
-              style={{
-                padding: "24px 0",
-                textAlign: "center",
-                fontSize: 14,
-                color: "#888780",
-              }}
-            >
-              No exercises found
-            </div>
+            <div className="aes-empty">No exercises found</div>
           )}
         </div>
 
-        {/* Footer */}
-        <div
-          style={{
-            flexShrink: 0,
-            borderTop: "0.5px solid #D3D1C7",
-            padding: "12px 16px",
-            background: "#FFFFFF",
-            display: "flex",
-            gap: 10,
-          }}
-        >
-          <button
-            disabled
-            style={{
-              flex: 1,
-              padding: 13,
-              borderRadius: 12,
-              border: "0.5px solid #D3D1C7",
-              background: "transparent",
-              fontSize: 14,
-              fontWeight: 500,
-              color: "#B4B2A9",
-              cursor: "not-allowed",
-            }}
-          >
-            Add as Superset
+        <div className="aes-footer">
+          <button type="button" className="aes-cancel" onClick={onClose}>
+            Cancel
           </button>
           <button
+            type="button"
+            className="aes-add"
             onClick={selected.size > 0 ? handleAdd : undefined}
             disabled={selected.size === 0}
-            style={{
-              flex: 1,
-              padding: 13,
-              borderRadius: 12,
-              border: "none",
-              background: selected.size > 0 ? "#7F77DD" : "#D3D1C7",
-              fontSize: 14,
-              fontWeight: 500,
-              color: "white",
-              cursor: selected.size > 0 ? "pointer" : "not-allowed",
-              transition: "background 0.15s",
-            }}
           >
-            {addLabel}
+            {selected.size > 0 ? `Add Exercises (${selected.size})` : "Add Exercises"}
           </button>
         </div>
       </div>

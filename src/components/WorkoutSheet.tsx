@@ -118,8 +118,8 @@ export function WorkoutSheet({ open, onCollapse, onFinish, onCancel }: WorkoutSh
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           style={{
-            background: "#FFFFFF",
-            height: 28,
+            background: "var(--paper)",
+            height: 20,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -134,7 +134,7 @@ export function WorkoutSheet({ open, onCollapse, onFinish, onCancel }: WorkoutSh
               width: 36,
               height: 4,
               borderRadius: 2,
-              background: "#D3D1C7",
+              background: "var(--rule-2)",
             }}
           />
         </div>

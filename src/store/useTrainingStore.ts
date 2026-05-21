@@ -1,15 +1,11 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Session, Program, ExerciseLog, SetLog, ReadinessCheckIn, ProgramBlock } from '@/types/training';
-import { sampleProgram } from '@/data/sampleProgram';
+import { Session, Program, ExerciseLog, SetLog, ReadinessCheckIn, ProgramBlock, Exercise, MuscleGroup } from '@/types/training';
+import { computeNextCursor, NextCursorResult } from '@/lib/programCursor';
+import { sampleProgram, EXERCISES } from '@/data/sampleProgram';
 import { sampleSessions } from '@/data/sampleSessions';
 
-export interface AdvanceCursorResult {
-  /** True if the lifter just finished the last Day of the last Week of the current Block. */
-  blockBoundaryCrossed: boolean;
-  /** The cursor was already on the final Day of the final Block — there's nowhere further to advance. */
-  programComplete: boolean;
-}
+export type AdvanceCursorResult = Pick<NextCursorResult, 'blockBoundaryCrossed' | 'programComplete'>;
 
 interface TrainingState {
   sessions: Session[];
@@ -23,6 +19,7 @@ interface TrainingState {
   logSet: (exerciseIndex: number, set: SetLog) => void;
   updateSet: (exerciseIndex: number, setIndex: number, set: Partial<SetLog>) => void;
   removeSet: (exerciseIndex: number, setIndex: number) => void;
+  removeExercise: (exerciseIndex: number) => void;
   addSetToExercise: (exerciseIndex: number) => void;
   finishSession: (note?: string) => void;
   cancelSession: () => void;
@@ -39,12 +36,72 @@ interface TrainingState {
 }
 
 /**
+ * Fallback mapping from the legacy single `muscleGroup` value to the new
+ * `primaryMuscles` array — used during v1→v2 migration when an Exercise id
+ * isn't found in the current `EXERCISES` table (e.g. removed/renamed seed
+ * exercises). The known-id path uses the canonical primary/secondary tagging.
+ */
+const LEGACY_MUSCLE_GROUP_MAP: Record<string, MuscleGroup[]> = {
+  Quads: ['Quads'],
+  Glutes: ['Glutes'],
+  Chest: ['Chest'],
+  Triceps: ['Triceps'],
+  Back: ['Lats', 'Upper Back'],
+  Hamstrings: ['Hamstrings'],
+  Shoulders: ['Front Delts', 'Side Delts'],
+  Biceps: ['Biceps'],
+  Core: ['Core'],
+  'Posterior Chain': ['Glutes', 'Hamstrings', 'Spinal Erectors'],
+};
+
+type LegacyExercise = {
+  id?: string;
+  name?: string;
+  muscleGroup?: string;
+  primaryMuscles?: MuscleGroup[];
+  secondaryMuscles?: MuscleGroup[];
+  isMainLift?: boolean;
+  relatedTo?: string;
+};
+
+function migrateExercise(legacy: LegacyExercise): Exercise {
+  // Already migrated — round-trip safe.
+  if (Array.isArray(legacy.primaryMuscles) && legacy.primaryMuscles.length > 0) {
+    const { muscleGroup: _drop, ...rest } = legacy;
+    void _drop;
+    return rest as Exercise;
+  }
+  const id = legacy.id ?? '';
+  const canonical = Object.values(EXERCISES).find((e) => e.id === id);
+  if (canonical) {
+    return {
+      ...canonical,
+      // Preserve any non-canonical fields the user might have on a custom copy.
+      id,
+      name: legacy.name ?? canonical.name,
+    };
+  }
+  const fallback = legacy.muscleGroup ? LEGACY_MUSCLE_GROUP_MAP[legacy.muscleGroup] : undefined;
+  const { muscleGroup: _drop, ...rest } = legacy;
+  void _drop;
+  return {
+    ...(rest as Omit<LegacyExercise, 'muscleGroup'>),
+    id,
+    name: legacy.name ?? id,
+    isMainLift: !!legacy.isMainLift,
+    primaryMuscles: fallback ?? ['Core'],
+  } as Exercise;
+}
+
+/**
  * Migrate persisted state across schema versions.
  *
  * Versions:
  *  - 0 (or undefined): pre-Week-layer. ProgramBlock had `weekNumber: number` and `days: ProgramDay[]`.
  *    Program lacked `currentWeekIndex`. We wrap each old block's `days` into a single Week.
  *  - 1: post-Week-layer. ProgramBlock has `weeks: ProgramWeek[]`; Program has `currentWeekIndex`.
+ *  - 2: Exercise.muscleGroup (single) replaced by primaryMuscles[] + secondaryMuscles[]?.
+ *    Walks every Exercise reachable from sessions and program and rewrites the shape.
  */
 function migrate(persistedState: unknown, version: number): TrainingState {
   const state = persistedState as Partial<TrainingState> & { program?: unknown };
@@ -76,6 +133,43 @@ function migrate(persistedState: unknown, version: number): TrainingState {
       currentWeekIndex: 0,
       currentDayIndex: oldProgram.currentDayIndex ?? 0,
     } as Program;
+  }
+  if (version < 2) {
+    if (Array.isArray(state.sessions)) {
+      for (const session of state.sessions) {
+        for (const log of session.exercises ?? []) {
+          log.exercise = migrateExercise(log.exercise as unknown as LegacyExercise);
+        }
+      }
+    }
+    if (state.program && typeof state.program === 'object') {
+      const program = state.program as Program;
+      for (const block of program.blocks ?? []) {
+        for (const week of block.weeks ?? []) {
+          for (const day of week.days ?? []) {
+            for (const pe of day.exercises ?? []) {
+              pe.exercise = migrateExercise(pe.exercise as unknown as LegacyExercise);
+            }
+          }
+        }
+      }
+    }
+    if ((state as { activeSession?: Session | null }).activeSession) {
+      const active = (state as { activeSession: Session }).activeSession;
+      for (const log of active.exercises ?? []) {
+        log.exercise = migrateExercise(log.exercise as unknown as LegacyExercise);
+      }
+    }
+  }
+  if (version < 3) {
+    // v3: refresh seed/demo sessions with the new generated dataset. Real
+    // user-logged sessions (id starts with "session-", produced by
+    // startSession) are preserved untouched. Old hand-curated sample sessions
+    // (s1..s5) and prior generated sets (gen-*) are replaced by the new
+    // generator output so the Progress tab has rich demo data.
+    const isUserLogged = (id: string) => id.startsWith('session-');
+    const userSessions = (state.sessions ?? []).filter((s) => isUserLogged(s.id));
+    state.sessions = [...sampleSessions, ...userSessions];
   }
   return state as TrainingState;
 }
@@ -150,6 +244,13 @@ export const useTrainingStore = create<TrainingState>()(
         set({ activeSession: { ...activeSession, exercises } });
       },
 
+      removeExercise: (exerciseIndex) => {
+        const { activeSession } = get();
+        if (!activeSession) return;
+        const exercises = activeSession.exercises.filter((_, i) => i !== exerciseIndex);
+        set({ activeSession: { ...activeSession, exercises } });
+      },
+
       addSetToExercise: (exerciseIndex) => {
         const { activeSession } = get();
         if (!activeSession) return;
@@ -190,38 +291,21 @@ export const useTrainingStore = create<TrainingState>()(
 
       advanceProgramCursor: () => {
         const { program } = get();
-        const block = program.blocks[program.currentBlockIndex];
-        const week = block?.weeks[program.currentWeekIndex];
-        if (!block || !week) {
-          return { blockBoundaryCrossed: false, programComplete: true };
-        }
-
-        const isLastDay = program.currentDayIndex >= week.days.length - 1;
-        const isLastWeek = program.currentWeekIndex >= block.weeks.length - 1;
-        const isLastBlock = program.currentBlockIndex >= program.blocks.length - 1;
-
-        if (!isLastDay) {
-          set({ program: { ...program, currentDayIndex: program.currentDayIndex + 1 } });
-          return { blockBoundaryCrossed: false, programComplete: false };
-        }
-
-        if (!isLastWeek) {
+        const result = computeNextCursor(program);
+        if (result.next) {
           set({
             program: {
               ...program,
-              currentWeekIndex: program.currentWeekIndex + 1,
-              currentDayIndex: 0,
+              currentBlockIndex: result.next.blockIndex,
+              currentWeekIndex: result.next.weekIndex,
+              currentDayIndex: result.next.dayIndex,
             },
           });
-          return { blockBoundaryCrossed: false, programComplete: false };
         }
-
-        if (!isLastBlock) {
-          // Surface the boundary; do not auto-advance the block (lifter chooses via end-of-block sheet).
-          return { blockBoundaryCrossed: true, programComplete: false };
-        }
-
-        return { blockBoundaryCrossed: true, programComplete: true };
+        return {
+          blockBoundaryCrossed: result.blockBoundaryCrossed,
+          programComplete: result.programComplete,
+        };
       },
 
       setProgramCursor: (blockIndex, weekIndex, dayIndex) => {
@@ -238,7 +322,7 @@ export const useTrainingStore = create<TrainingState>()(
     }),
     {
       name: 'training-store',
-      version: 1,
+      version: 3,
       migrate: (persistedState, version) => migrate(persistedState, version),
     }
   )

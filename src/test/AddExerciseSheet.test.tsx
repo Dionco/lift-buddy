@@ -10,7 +10,7 @@ const mockSession = (exerciseIds: string[]): Session => ({
   id: `s-${Math.random()}`,
   startTime: 0,
   exercises: exerciseIds.map((id) => ({
-    exercise: { id, name: id, muscleGroup: 'Quads', isMainLift: false },
+    exercise: { id, name: id, primaryMuscles: ['Quads'], isMainLift: false },
     sets: [],
   })),
 });
