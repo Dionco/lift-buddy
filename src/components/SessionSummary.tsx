@@ -2,8 +2,9 @@ import { useState, useMemo } from 'react';
 import {
   Session,
   diffSessionAgainstDay,
-  getTopSetE1RM,
 } from '@/types/training';
+import { topSetE1rm } from '@/lib/e1rm';
+import { sessionStats } from '@/lib/sessionStats';
 import {
   findDayById,
   computeBlockBoundaryChoice,
@@ -40,29 +41,18 @@ export function SessionSummary({ session, onClose }: SessionSummaryProps) {
   );
 
   const stats = useMemo(() => {
-    const totalSets = session.exercises.reduce(
-      (sum, ex) => sum + ex.sets.filter((s) => s.completed).length, 0
-    );
-    const duration = session.endTime
-      ? Math.round((session.endTime - session.startTime) / 60000)
-      : 0;
-    const allRpes = session.exercises.flatMap((ex) =>
-      ex.sets.filter((s) => s.completed).map((s) => s.rpe)
-    );
-    const avgRpe = allRpes.length > 0
-      ? (allRpes.reduce((a, b) => a + b, 0) / allRpes.length).toFixed(1)
-      : '—';
+    const base = sessionStats(session);
 
     const topSetE1RMs: { name: string; e1rm: number; isMainLift: boolean }[] = [];
     for (const ex of session.exercises) {
-      const e1rm = getTopSetE1RM(ex.sets);
+      const e1rm = topSetE1rm(ex.sets);
       if (e1rm > 0) {
         topSetE1RMs.push({ name: ex.exercise.name, e1rm, isMainLift: ex.exercise.isMainLift });
       }
     }
     topSetE1RMs.sort((a, b) => Number(b.isMainLift) - Number(a.isMainLift));
 
-    return { totalSets, duration, avgRpe, topSetE1RMs };
+    return { ...base, topSetE1RMs };
   }, [session]);
 
   const diff = useMemo(
@@ -107,17 +97,19 @@ export function SessionSummary({ session, onClose }: SessionSummaryProps) {
       <div className="grid grid-cols-3 gap-3 mb-6">
         <div className="flex flex-col items-center rounded-xl border border-border bg-card p-4">
           <BarChart3 className="h-5 w-5 text-primary mb-1" />
-          <span className="text-2xl font-bold">{stats.totalSets}</span>
+          <span className="text-2xl font-bold">{stats.completedSets}</span>
           <span className="text-xs text-muted-foreground">Sets</span>
         </div>
         <div className="flex flex-col items-center rounded-xl border border-border bg-card p-4">
           <Clock className="h-5 w-5 text-primary mb-1" />
-          <span className="text-2xl font-bold">{stats.duration}</span>
+          <span className="text-2xl font-bold">{stats.durationMinutes ?? 0}</span>
           <span className="text-xs text-muted-foreground">Min</span>
         </div>
         <div className="flex flex-col items-center rounded-xl border border-border bg-card p-4">
           <Activity className="h-5 w-5 text-primary mb-1" />
-          <span className="text-2xl font-bold">{stats.avgRpe}</span>
+          <span className="text-2xl font-bold">
+            {stats.avgRpe !== null ? stats.avgRpe.toFixed(1) : '—'}
+          </span>
           <span className="text-xs text-muted-foreground">Avg RPE</span>
         </div>
       </div>

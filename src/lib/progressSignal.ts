@@ -1,5 +1,5 @@
-import { Exercise, Session, calculateE1RM } from '@/types/training';
-import { lastTopSet, recentTopSetE1RMs, topSetOf } from './topSet';
+import { Exercise, Session } from '@/types/training';
+import { e1rm, lastTopSet, recentTopSetE1RMs, topSet } from './e1rm';
 
 export type RepRangeBucket = '1-5' | '6-10' | '11+';
 
@@ -97,11 +97,11 @@ export function mainLiftProgressSignal(
   for (const session of sessions) {
     const log = session.exercises.find((e) => e.exercise.id === exercise.id);
     if (!log) continue;
-    const top = topSetOf(log.sets);
+    const top = topSet(log.sets);
     if (!top) continue;
     samples.push({
       timestamp: session.startTime,
-      e1rm: calculateE1RM(top.weight, top.reps, top.rpe),
+      e1rm: e1rm(top.weight, top.reps, top.rpe),
       bucket: repRangeBucket(top.reps),
     });
   }
@@ -174,7 +174,7 @@ export function accessoryProgressSignal(
   for (const s of sessions) {
     const log = s.exercises.find((e) => e.exercise.id === exercise.id);
     if (!log) continue;
-    const top = topSetOf(log.sets);
+    const top = topSet(log.sets);
     if (!top) continue;
     tops.push({ weight: top.weight, reps: top.reps });
     if (tops.length === 2) break;

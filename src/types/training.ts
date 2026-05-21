@@ -135,18 +135,6 @@ export interface Program {
   currentDayIndex: number;
 }
 
-export function calculateE1RM(weight: number, reps: number, rpe: number): number {
-  const effectiveReps = reps + (10 - rpe);
-  if (effectiveReps <= 0) return weight;
-  return weight / (1.0278 - 0.0278 * effectiveReps);
-}
-
-export function getTopSetE1RM(sets: SetLog[]): number {
-  const completed = sets.filter(s => s.completed && s.weight > 0 && s.reps > 0);
-  if (completed.length === 0) return 0;
-  return Math.max(...completed.map(s => calculateE1RM(s.weight, s.reps, s.rpe)));
-}
-
 /**
  * Parse the lower bound of a prescription rep string like "5" or "8-12".
  * Returns null if unparseable (e.g. time-based "60s").

@@ -7,9 +7,8 @@ import {
   ExerciseLog,
   Session,
   SetLog,
-  calculateE1RM,
 } from '@/types/training';
-import { lastTopSet } from '@/lib/topSet';
+import { e1rm, topSetE1rm, lastTopSet } from '@/lib/e1rm';
 import { AddExerciseSheet } from './AddExerciseSheet';
 import { Swipeable } from './Swipeable';
 
@@ -115,7 +114,7 @@ function Numpad({ visible, active, exercises, onKey, onHide, onNext, onRPE }: Nu
 
   const liveE1RM =
     previewSet && previewSet.weight && previewSet.reps
-      ? calculateE1RM(parseFloat(previewSet.weight), parseInt(previewSet.reps, 10), previewSet.rpe)
+      ? e1rm(parseFloat(previewSet.weight), parseInt(previewSet.reps, 10), previewSet.rpe)
       : 0;
 
   const fieldVal = previewSet && active ? previewSet[active.field] : '';
@@ -217,14 +216,19 @@ interface ExerciseBlockProps {
 }
 
 function ExerciseBlock({ ex, active, onFocus, onToggleDone, onAddSet, onApplyTarget, onDeleteSet }: ExerciseBlockProps) {
-  const topE1RM = ex.sets.reduce((best, s) => {
-    if (!s.done) return best;
-    const w = parseFloat(s.weight);
-    const r = parseInt(s.reps, 10);
-    if (!Number.isFinite(w) || !Number.isFinite(r)) return best;
-    const e = calculateE1RM(w, r, s.rpe);
-    return e > best ? e : best;
-  }, 0);
+  // Coerce the string-typed edit buffer to numeric SetLogs once, then defer the
+  // "highest e1RM" rule to the deep e1rm module. topSet's weight/reps > 0 filter
+  // discards blank inputs (parseFloat('') → NaN, NaN > 0 → false).
+  const topE1RM = topSetE1rm(
+    ex.sets.map((s) => ({
+      id: s.id,
+      weight: parseFloat(s.weight),
+      reps: parseInt(s.reps, 10),
+      rpe: s.rpe,
+      timestamp: 0,
+      completed: s.done,
+    })),
+  );
 
   return (
     <div className={`xb ${ex.isMainLift ? 'is-main' : ''}`}>
@@ -267,7 +271,7 @@ function ExerciseBlock({ ex, active, onFocus, onToggleDone, onAddSet, onApplyTar
         const w = parseFloat(s.weight);
         const r = parseInt(s.reps, 10);
         const e1rm =
-          Number.isFinite(w) && Number.isFinite(r) && w > 0 && r > 0 ? calculateE1RM(w, r, s.rpe) : 0;
+          Number.isFinite(w) && Number.isFinite(r) && w > 0 && r > 0 ? e1rm(w, r, s.rpe) : 0;
         // A set is "non-programmed" when there's no prescription, or when its
         // index is past the prescribed set count (i.e. user-added via Add Set).
         const isExtraSet =

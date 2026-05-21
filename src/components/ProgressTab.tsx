@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useTrainingStore } from '@/store/useTrainingStore';
-import { MAIN_LIFTS, getTopSetE1RM, MuscleGroup, MUSCLE_REGION, MUSCLE_REGION_ORDER, MuscleRegion } from '@/types/training';
+import { MAIN_LIFTS, MuscleGroup, MUSCLE_REGION, MUSCLE_REGION_ORDER, MuscleRegion, SetLog } from '@/types/training';
+import { topSetE1rm } from '@/lib/e1rm';
+import { avgRpe } from '@/lib/sessionStats';
 import { fatigueSignal } from '@/lib/progressSignal';
 import {
   computeWeeklyVolume,
@@ -38,7 +40,7 @@ export function ProgressTab() {
     for (const session of sorted) {
       for (const ex of session.exercises) {
         if (MAIN_LIFTS.includes(ex.exercise.name as any)) {
-          const e1rm = getTopSetE1RM(ex.sets);
+          const e1rm = topSetE1rm(ex.sets);
           if (e1rm > 0) {
             data[ex.exercise.name].push({
               date: new Date(session.startTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
@@ -75,22 +77,22 @@ export function ProgressTab() {
   // Weekly volume — domain rule lives in `lib/volume`.
   const weekData = useMemo(() => {
     const volume = computeWeeklyVolume(sessions, { weekOffset });
-    // Avg-RPE-per-day is a separate concern from working-set volume; computed inline.
-    const dayRpes: Record<string, number[]> = {};
+    // Avg-RPE-per-day pools completed sets by weekday; the mean itself is the
+    // shared `avgRpe` kernel in `lib/sessionStats`.
+    const daySets: Record<string, SetLog[]> = {};
     for (const session of sessions) {
       if (session.startTime < volume.start.getTime() || session.startTime > volume.end.getTime()) continue;
       const dayKey = new Date(session.startTime).toLocaleDateString('en-GB', { weekday: 'short' });
       for (const ex of session.exercises) {
         for (const set of ex.sets) {
           if (!set.completed) continue;
-          if (!dayRpes[dayKey]) dayRpes[dayKey] = [];
-          dayRpes[dayKey].push(set.rpe);
+          (daySets[dayKey] ??= []).push(set);
         }
       }
     }
-    const rpeByDay = Object.entries(dayRpes).map(([day, rpes]) => ({
+    const rpeByDay = Object.entries(daySets).map(([day, sets]) => ({
       day,
-      avgRpe: +(rpes.reduce((a, b) => a + b, 0) / rpes.length).toFixed(1),
+      avgRpe: +(avgRpe(sets) ?? 0).toFixed(1),
     }));
     return { ...volume, rpeByDay };
   }, [sessions, weekOffset]);

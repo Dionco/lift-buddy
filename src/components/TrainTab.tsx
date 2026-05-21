@@ -6,7 +6,7 @@ import {
   Session,
   SetLog,
 } from '@/types/training';
-import { lastTopSet } from '@/lib/topSet';
+import { lastTopSet } from '@/lib/e1rm';
 import { fatigueSignal, type FatigueSignal } from '@/lib/progressSignal';
 import { formatMuscles } from '@/lib/muscleLabels';
 

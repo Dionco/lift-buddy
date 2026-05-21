@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useTrainingStore } from '@/store/useTrainingStore';
-import { Session, getTopSetE1RM } from '@/types/training';
+import { topSetE1rm } from '@/lib/e1rm';
+import { sessionStats } from '@/lib/sessionStats';
 import { formatMuscles } from '@/lib/muscleLabels';
 import { ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock, Activity, BarChart3, Dumbbell, X } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar';
@@ -64,23 +65,6 @@ export function HistoryTab() {
     });
   const formatTime = (ts: number) =>
     new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  const formatDuration = (s: Session) => {
-    if (!s.endTime) return '—';
-    const mins = Math.round((s.endTime - s.startTime) / 60000);
-    return `${mins} min`;
-  };
-  const getAvgRpe = (s: Session) => {
-    const rpes = s.exercises.flatMap(ex =>
-      ex.sets.filter(set => set.completed).map(set => set.rpe)
-    );
-    return rpes.length > 0 ? (rpes.reduce((a, b) => a + b, 0) / rpes.length).toFixed(1) : null;
-  };
-  const getTotalSets = (s: Session) =>
-    s.exercises.reduce((sum, ex) => sum + ex.sets.filter(set => set.completed).length, 0);
-  const getTotalVolume = (s: Session) =>
-    s.exercises.reduce((sum, ex) =>
-      sum + ex.sets.filter(set => set.completed).reduce((ss, set) => ss + set.weight * set.reps, 0),
-    0);
   // Custom day content to render workout dots
   const DayContent = ({ date }: DayContentProps) => {
     const hasWorkout = workoutDateKeys.has(calendarDateKey(date));
@@ -172,9 +156,8 @@ export function HistoryTab() {
       <div className="flex flex-col gap-3">
         {displayed.map((session) => {
           const isExpanded = expandedIds.has(session.id);
-          const totalSets = getTotalSets(session);
-          const totalVolume = getTotalVolume(session);
-          const avgRpe = getAvgRpe(session);
+          const { completedSets: totalSets, totalVolume, avgRpe, durationMinutes } =
+            sessionStats(session);
           return (
             <div key={session.id} className="rounded-xl border border-border bg-card overflow-hidden">
               {/* Card header */}
@@ -195,7 +178,7 @@ export function HistoryTab() {
                   <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
                       <Clock className="h-3 w-3 shrink-0" />
-                      {formatDuration(session)}
+                      {durationMinutes !== null ? `${durationMinutes} min` : '—'}
                     </span>
                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
                       <BarChart3 className="h-3 w-3 shrink-0" />
@@ -209,10 +192,10 @@ export function HistoryTab() {
                           : `${totalVolume}kg`} volume
                       </span>
                     )}
-                    {avgRpe && (
+                    {avgRpe !== null && (
                       <span className="flex items-center gap-1 text-xs text-muted-foreground">
                         <Activity className="h-3 w-3 shrink-0" />
-                        RPE {avgRpe} avg
+                        RPE {avgRpe.toFixed(1)} avg
                       </span>
                     )}
                   </div>
@@ -238,7 +221,7 @@ export function HistoryTab() {
                   {session.exercises.map((ex, i) => {
                     const completedSets = ex.sets.filter(s => s.completed);
                     if (completedSets.length === 0) return null;
-                    const e1rm = getTopSetE1RM(ex.sets);
+                    const e1rm = topSetE1rm(ex.sets);
                     return (
                       <div key={i}>
                         <div className="flex items-center gap-2 mb-1.5">
