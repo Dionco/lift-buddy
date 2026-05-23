@@ -73,7 +73,9 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
         id: `preset-${Date.now()}-${i}`,
         weight: 0,
         reps: 0,
-        rpe: pe.prescription.rpeTarget ?? 7,
+        // rpe=0 is the unset sentinel per ADR-0006. Pre-filling
+        // prescription.rpeTarget would silently contaminate the Fatigue Signal.
+        rpe: 0,
         timestamp: 0,
         completed: false,
       }));

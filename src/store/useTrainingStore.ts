@@ -274,7 +274,9 @@ export const useTrainingStore = create<TrainingState>()(
           id: `set-${Date.now()}`,
           weight: lastSet?.weight || 0,
           reps: lastSet?.reps || 0,
-          rpe: lastSet?.rpe || 7,
+          // rpe=0 is the unset sentinel per ADR-0006. The lifter must pick an
+          // RPE before the set can be marked complete.
+          rpe: 0,
           timestamp: Date.now(),
           completed: false,
         };
@@ -288,8 +290,20 @@ export const useTrainingStore = create<TrainingState>()(
       finishSession: (note) => {
         const { activeSession, sessions } = get();
         if (!activeSession) return;
+        // Normalise per ADR-0005 + ADR-0006: drop placeholder sets the lifter
+        // never logged, then drop any ExerciseLog whose sets[] is now empty so
+        // the Day-vs-Session diff catches it as Prescribed-but-Skipped.
+        const cleanedExercises: ExerciseLog[] = [];
+        for (const log of activeSession.exercises) {
+          const realSets = log.sets.filter(
+            (s) => !(s.completed === false && (s.weight === 0 || s.reps === 0)),
+          );
+          if (realSets.length === 0) continue;
+          cleanedExercises.push({ ...log, sets: realSets });
+        }
         const finished: Session = {
           ...activeSession,
+          exercises: cleanedExercises,
           endTime: Date.now(),
           note,
         };

@@ -11,5 +11,5 @@ Storing prescription numbers in the Set would force every read site to know whic
 ## Consequences
 
 - All read sites that compute "missed reps" must do so by comparing `SetLog.reps` to the matching `Prescription.reps`. There is no shortcut field.
-- Validation: `reps` should not be defaulted to the prescription value when a Set is logged — it must come from lifter input.
+- Validation: `reps` should not be defaulted to the prescription value when a Set is logged — it must come from lifter input. **`rpe` follows the same rule**: a SetLog is not logged until the lifter explicitly picks an RPE. Defaulting to `prescription.rpeTarget` would contaminate the Fatigue Signal (which is defined as RPE drift on the same load/reps) — by construction, every recorded RPE would equal the prescribed RPE and drift would be undetectable.
 - A "skipped set" UI doesn't write a SetLog at all; it just doesn't add one.

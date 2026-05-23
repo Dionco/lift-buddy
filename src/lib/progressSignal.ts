@@ -1,4 +1,4 @@
-import { Exercise, Session } from '@/types/training';
+import { Exercise, Session, SetLog, SetPrescription } from '@/types/training';
 import { e1rm, lastTopSet, recentTopSetE1RMs, topSet } from './e1rm';
 
 export type RepRangeBucket = '1-5' | '6-10' | '11+';
@@ -195,6 +195,85 @@ export function accessoryProgressSignal(
     return { trending: 'down', reason: 'none', previous, latest };
   }
   return { trending: 'flat', reason: 'none', previous, latest };
+}
+
+// ─── Prescriptive nudge for the active session ─────────────────────────────
+
+/**
+ * Parse a prescription rep string like "5", "8-12", "8–12" into bounds.
+ * Returns null for unparseable inputs (e.g. time-based "60s"). Tolerates both
+ * ASCII hyphen and en-dash.
+ */
+function parseRepRange(reps: string): { lower: number; upper: number } | null {
+  const match = reps.match(/^(\d+)\s*[-–]\s*(\d+)|^(\d+)/);
+  if (!match) return null;
+  if (match[1] && match[2]) {
+    const lower = parseInt(match[1], 10);
+    const upper = parseInt(match[2], 10);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) return null;
+    return { lower, upper };
+  }
+  const n = parseInt(match[3], 10);
+  if (!Number.isFinite(n)) return null;
+  return { lower: n, upper: n };
+}
+
+export type AccessorySuggestion =
+  | { kind: 'first-time' }
+  | { kind: 'match'; load: number; reps: number; rpe: number }
+  | { kind: 'add-reps'; load: number; targetReps: number; rpe: number }
+  | { kind: 'add-load'; previousLoad: number; previousReps: number };
+
+/**
+ * Per ADR-0011 (strict Double Progression): given last session's logged sets
+ * for an accessory and the current Day's prescription, suggest what to aim for
+ * today.
+ *
+ * `add-load` fires only when **all** prescribed-count working sets in the last
+ * session hit the top of the rep range AND every set's RPE was at or below the
+ * prescription's `rpeTarget` (when one is set). Anything else nudges the lifter
+ * to add a rep on each set, or to simply match last session if they're already
+ * at the top without earning the load bump.
+ *
+ * Pure: no Session iteration, no store coupling — caller passes the relevant
+ * prevSets (typically from `lastSessionSets`) and the day's prescription.
+ */
+export function nextAccessorySuggestion(
+  prevSets: SetLog[],
+  prescription: SetPrescription,
+): AccessorySuggestion {
+  const completed = prevSets.filter(
+    (s) => s.completed && s.weight > 0 && s.reps > 0 && s.rpe > 0,
+  );
+  if (completed.length === 0) return { kind: 'first-time' };
+
+  const last = completed[completed.length - 1];
+  const range = parseRepRange(prescription.reps);
+  if (!range) {
+    return { kind: 'match', load: last.weight, reps: last.reps, rpe: last.rpe };
+  }
+
+  const allAtTop =
+    completed.length >= prescription.sets && completed.every((s) => s.reps >= range.upper);
+  const rpeWithinTarget =
+    prescription.rpeTarget == null
+      ? true
+      : completed.every((s) => s.rpe <= (prescription.rpeTarget as number));
+
+  if (allAtTop && rpeWithinTarget) {
+    return { kind: 'add-load', previousLoad: last.weight, previousReps: last.reps };
+  }
+
+  const nextRepTarget = Math.min(last.reps + 1, range.upper);
+  if (nextRepTarget > last.reps) {
+    return {
+      kind: 'add-reps',
+      load: last.weight,
+      targetReps: nextRepTarget,
+      rpe: last.rpe,
+    };
+  }
+  return { kind: 'match', load: last.weight, reps: last.reps, rpe: last.rpe };
 }
 
 // ─── Convenience dispatch ──────────────────────────────────────────────────

@@ -20,7 +20,12 @@ export function e1rm(weight: number, reps: number, rpe: number): number {
  * Returns null if no Set is completed (or all are warmups with weight/reps of 0).
  */
 export function topSet(sets: SetLog[]): SetLog | null {
-  const completed = sets.filter((s) => s.completed && s.weight > 0 && s.reps > 0);
+  // rpe > 0 is the unset sentinel (ADR-0006): a set with rpe=0 is incomplete
+  // by construction and must not enter the top-set comparison — the e1RM
+  // formula goes haywire when rpe is below 6.
+  const completed = sets.filter(
+    (s) => s.completed && s.weight > 0 && s.reps > 0 && s.rpe > 0,
+  );
   if (completed.length === 0) return null;
   return completed.reduce(
     (best, s) => (e1rm(s.weight, s.reps, s.rpe) >= e1rm(best.weight, best.reps, best.rpe) ? s : best),
@@ -68,4 +73,21 @@ export function recentTopSetE1RMs(sessions: Session[], exerciseId: string, limit
     out.push(e1rm(top.weight, top.reps, top.rpe));
   }
   return out;
+}
+
+/**
+ * The completed sets from the most recent Session that contains this Exercise.
+ * Used by the active workout's "PREVIOUS" column on accessory lifts to show
+ * what was performed set-by-set last time, so the lifter can match it.
+ * Returns an empty array if the exercise has never been logged (with completed
+ * sets).
+ */
+export function lastSessionSets(sessions: Session[], exerciseId: string): SetLog[] {
+  for (const s of sessions) {
+    const log = s.exercises.find((e) => e.exercise.id === exerciseId);
+    if (!log) continue;
+    const completed = log.sets.filter((x) => x.completed && x.weight > 0 && x.reps > 0);
+    if (completed.length > 0) return completed;
+  }
+  return [];
 }

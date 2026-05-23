@@ -1,5 +1,4 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import { useTrainingStore } from '@/store/useTrainingStore';
 import { useElapsedTime } from '@/hooks/useElapsedTime';
 import {
@@ -8,7 +7,12 @@ import {
   Session,
   SetLog,
 } from '@/types/training';
-import { e1rm, topSetE1rm, lastTopSet } from '@/lib/e1rm';
+import { e1rm as e1rmFn, lastTopSet, lastSessionSets } from '@/lib/e1rm';
+import { suggestRest } from '@/lib/restTimer';
+import {
+  nextAccessorySuggestion,
+  type AccessorySuggestion,
+} from '@/lib/progressSignal';
 import { AddExerciseSheet } from './AddExerciseSheet';
 import { Swipeable } from './Swipeable';
 
@@ -28,8 +32,15 @@ interface UIExercise {
   exerciseId: string;
   name: string;
   isMainLift: boolean;
+  /** Parent lift id when this is a Variation (per ADR-0009). Drives the
+   *  deadlift surcharge on rest suggestions. */
+  relatedTo?: string;
+  muscles: string[];
   prescription?: { sets: number; reps: string; rpeTarget?: number };
   prevTop: SetLog | null;
+  /** Completed sets from the most recent session that performed this exercise.
+   *  Used by the PREVIOUS column on accessory lifts. */
+  prevSets: SetLog[];
   sets: UISet[];
 }
 
@@ -59,151 +70,449 @@ function buildInitial(
   return activeSessionExercises.map((log, exId) => {
     const pe = programDay?.exercises.find((p) => p.exercise.id === log.exercise.id);
     const prevTop = lastTopSet(sessions, log.exercise.id);
+    const prevSets = lastSessionSets(sessions, log.exercise.id);
+    // Pre-fill the editable buffer so the user can just confirm + log without
+    // re-typing. Main lifts use TARGET (top weight × prescribed reps); accessory
+    // lifts use PREVIOUS (per-set weight/reps/rpe from last session) so the
+    // lifter can match what they did. The store keeps weight/reps at 0 until
+    // they log — these strings are only the visible/editable buffer.
+    const prescribedRepsLB = pe?.prescription?.reps?.match(/^(\d+)/)?.[1];
+    const isMain = log.exercise.isMainLift;
+    // Main Lifts and Variations (per ADR-0009 / Q5) anchor on the top set
+    // and the prescription. Accessories anchor on the matched-position previous
+    // set (Double Progression).
+    const useTopAnchor = isMain || !!log.exercise.relatedTo;
     return {
       exId,
       exerciseId: log.exercise.id,
       name: log.exercise.name,
-      isMainLift: log.exercise.isMainLift,
+      isMainLift: isMain,
+      relatedTo: log.exercise.relatedTo,
+      muscles: log.exercise.primaryMuscles ?? [],
       prescription: pe?.prescription,
       prevTop,
-      sets: log.sets.map((s, i) => ({
-        id: `${exId}-${i + 1}`,
-        weight: s.weight > 0 ? String(s.weight) : '',
-        reps: s.reps > 0 ? String(s.reps) : '',
-        rpe: s.rpe || pe?.prescription?.rpeTarget || 7,
-        done: s.completed,
-        programRPE: pe?.prescription?.rpeTarget,
-      })),
+      prevSets,
+      sets: log.sets.map((s, i) => {
+        const prevSet = prevSets[i];
+        const fallbackWeight = useTopAnchor
+          ? prevTop?.weight
+          : (prevSet?.weight ?? prevTop?.weight);
+        const fallbackReps = useTopAnchor
+          ? prescribedRepsLB
+          : (prevSet?.reps ? String(prevSet.reps) : prescribedRepsLB);
+        // RPE per ADR-0006 must come from explicit lifter input. We do NOT
+        // pre-fill from prescription.rpeTarget — that would silently contaminate
+        // the Fatigue Signal (RPE drift on same load/reps). For accessories,
+        // surfacing the previous logged RPE is an observation (not a prescription
+        // value), so it's an acceptable visual hint; for mains we leave it unset.
+        const fallbackRpe = !useTopAnchor && prevSet?.rpe ? prevSet.rpe : 0;
+        return {
+          id: `${exId}-${i + 1}`,
+          weight:
+            s.weight > 0
+              ? String(s.weight)
+              : fallbackWeight
+                ? String(fallbackWeight)
+                : '',
+          reps:
+            s.reps > 0
+              ? String(s.reps)
+              : fallbackReps ?? '',
+          rpe: s.rpe || fallbackRpe,
+          done: s.completed,
+          programRPE: pe?.prescription?.rpeTarget,
+        };
+      }),
     };
   });
 }
 
-// ─── Numpad ────────────────────────────────────────────────────────────────
+function fmtTimerSec(s: number) {
+  const m = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+}
 
-const RPE_VALUES = [6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10] as const;
-const RPE_LABELS: Record<number, string> = {
-  6: 'Moderate',
-  6.5: 'Moderate',
-  7: 'Vigorous',
-  7.5: 'Vigorous',
-  8: 'Hard',
-  8.5: 'Hard',
-  9: 'Very Hard',
-  9.5: 'Very Hard',
-  10: 'Max Effort',
-};
+/**
+ * The "e1RM is a meaningful live signal" gate (Q4). Main Lifts and their
+ * Variations (linked via relatedTo) get the live e1RM tile in the numpad
+ * and a top-set anchor on the TARGET/LAST surfaces. True accessories
+ * (curls, lateral raises) follow Double Progression instead.
+ */
+function isMainOrVariation(ex: { isMainLift: boolean; relatedTo?: string }): boolean {
+  return ex.isMainLift || !!ex.relatedTo;
+}
+
+/**
+ * Compact summary of the lifter's last logged session for an accessory.
+ * Drives the "LAST SESSION" tile (Q10). Returns null when there's no prior
+ * data worth displaying.
+ *
+ *   - All sets same weight + same reps:    `{N}×{reps}` (e.g. "3×12")
+ *   - All sets same weight, varying reps:  `{r1}/{r2}/{r3}` (e.g. "12/11/10")
+ *   - Mixed weights:                       last set only ("{reps} reps")
+ */
+function summariseLastSession(
+  prevSets: SetLog[],
+): { weight: number; summary: string; rpe: number } | null {
+  const completed = prevSets.filter(
+    (s) => s.completed && s.weight > 0 && s.reps > 0 && s.rpe > 0,
+  );
+  if (completed.length === 0) return null;
+  const last = completed[completed.length - 1];
+  const sameWeight = completed.every((s) => s.weight === completed[0].weight);
+  if (!sameWeight) {
+    return { weight: last.weight, summary: `${last.reps} reps`, rpe: last.rpe };
+  }
+  const reps = completed.map((s) => s.reps);
+  const allEqualReps = reps.every((r) => r === reps[0]);
+  const summary = allEqualReps ? `${reps.length}×${reps[0]}` : reps.join('/');
+  return { weight: completed[0].weight, summary, rpe: last.rpe };
+}
+
+/** Short user-facing label for the double-progression nudge tile / hint. */
+function nudgeLabel(s: AccessorySuggestion): string {
+  switch (s.kind) {
+    case 'add-load':
+      return `+ LOAD (last: ${s.previousLoad}kg × ${s.previousReps})`;
+    case 'add-reps':
+      return `+1 REP → ${s.targetReps} @ ${s.load}kg`;
+    case 'match':
+      return `MATCH ${s.load}kg × ${s.reps}`;
+    case 'first-time':
+      return 'FIRST TIME — PICK A LOAD';
+  }
+}
+
+const RPE_ROWS: { v: number; t: string }[] = [
+  { v: 10, t: 'Max' },
+  { v: 9.5, t: 'V.Hard' },
+  { v: 9, t: 'V.Hard' },
+  { v: 8.5, t: 'Hard' },
+  { v: 8, t: 'Hard' },
+  { v: 7.5, t: 'Mod+' },
+  { v: 7, t: 'Mod' },
+  { v: 6.5, t: 'Easy+' },
+  { v: 6, t: 'Easy' },
+];
+
+// ─── Numpad v2 ─────────────────────────────────────────────────────────────
 
 interface NumpadProps {
   visible: boolean;
   active: ActiveInput | null;
   exercises: UIExercise[];
   onKey: (key: string) => void;
-  onHide: () => void;
-  onNext: () => void;
-  onRPE: (rpe: number) => void;
+  onClose: () => void;
+  onLog: () => void;
+  canLog: boolean;
+  onSetField: (field: 'weight' | 'reps') => void;
+  onInc: (delta: number) => void;
+  onRpe: (rpe: number) => void;
+  numpadRef: React.RefObject<HTMLDivElement>;
 }
 
-function Numpad({ visible, active, exercises, onKey, onHide, onNext, onRPE }: NumpadProps) {
-  const [showRPE, setShowRPE] = useState(false);
-
+function Numpad({
+  visible,
+  active,
+  exercises,
+  onKey,
+  onClose,
+  onLog,
+  canLog,
+  onSetField,
+  onInc,
+  onRpe,
+  numpadRef,
+}: NumpadProps) {
   const previewSet = useMemo(() => {
     if (!active) return null;
     const ex = exercises.find((e) => e.exId === active.exId);
     return ex?.sets.find((s) => s.id === active.setId) ?? null;
   }, [active, exercises]);
 
+  const activeEx = useMemo(
+    () => (active ? exercises.find((e) => e.exId === active.exId) : null),
+    [active, exercises],
+  );
+  const setIndex = useMemo(() => {
+    if (!active || !activeEx) return 0;
+    return activeEx.sets.findIndex((s) => s.id === active.setId);
+  }, [active, activeEx]);
+
+  const showE1RM = activeEx ? isMainOrVariation(activeEx) : false;
   const liveE1RM =
-    previewSet && previewSet.weight && previewSet.reps
-      ? e1rm(parseFloat(previewSet.weight), parseInt(previewSet.reps, 10), previewSet.rpe)
+    showE1RM && previewSet && previewSet.weight && previewSet.reps && previewSet.rpe > 0
+      ? e1rmFn(parseFloat(previewSet.weight), parseInt(previewSet.reps, 10), previewSet.rpe)
       : 0;
 
-  const fieldVal = previewSet && active ? previewSet[active.field] : '';
+  // For accessories: the EST. 1RM tile is replaced by a Double Progression
+  // nudge (ADR-0011). Compute once per active exercise.
+  const accessoryNudge: AccessorySuggestion | null = useMemo(() => {
+    if (!activeEx || showE1RM) return null;
+    if (!activeEx.prescription) return null;
+    return nextAccessorySuggestion(activeEx.prevSets, {
+      sets: activeEx.prescription.sets,
+      reps: activeEx.prescription.reps,
+      rpeTarget: activeEx.prescription.rpeTarget,
+    });
+  }, [activeEx, showE1RM]);
+
+  const targetStr = activeEx
+    ? `${activeEx.prevTop?.weight ? `${activeEx.prevTop.weight}kg · ` : ''}${
+        activeEx.prescription?.reps ?? '—'
+      }${
+        activeEx.prescription?.rpeTarget != null ? ` @${activeEx.prescription.rpeTarget}` : ''
+      }`
+    : '';
 
   return (
-    <div data-numpad className={`np ${visible ? 'is-visible' : ''}`}>
-      <div className="np-preview">
-        <div className="np-preview-block">
-          <div className="np-preview-label">{active?.field === 'reps' ? 'Reps' : 'Weight'}</div>
-          <div className="np-preview-val">
-            {fieldVal || '—'}
-            {active?.field === 'weight' && previewSet?.weight && (
-              <span className="np-preview-unit">kg</span>
-            )}
+    <div ref={numpadRef} data-numpad className={`np2 ${visible ? 'is-visible' : ''}`}>
+      <div className="np2-head">
+        <div className="np2-head-set">
+          <div className="np2-head-eyebrow">
+            SET {setIndex + 1} OF {activeEx?.sets.length ?? 0}
           </div>
+          <div className="np2-head-name">{activeEx?.name ?? '—'}</div>
         </div>
-        <div className="np-preview-block">
-          <div className="np-preview-label">RPE</div>
-          <div className="np-preview-val">{previewSet?.rpe ?? '—'}</div>
-        </div>
-        <div className="np-preview-block np-preview-e1rm">
-          <div className="np-preview-label">e1RM</div>
-          <div className="np-preview-val">
-            {liveE1RM > 0 ? liveE1RM.toFixed(1) : '—'}
-            {liveE1RM > 0 && <span className="np-preview-unit">kg</span>}
+        {activeEx?.prescription && (
+          <div className="np2-head-target">
+            <span className="lbl">TARGET</span>
+            <span>{targetStr}</span>
           </div>
-        </div>
+        )}
+        <button type="button" className="np2-close" onClick={onClose} aria-label="Close numpad">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          </svg>
+        </button>
       </div>
 
-      <div className="np-toolbar">
-        <button type="button" className="np-tool" onClick={onHide}>
-          Done
+      <div className="np2-vals">
+        <button
+          type="button"
+          className={`np2-val np2-val--w is-field ${active?.field === 'weight' ? 'is-active' : ''}`}
+          onClick={() => onSetField('weight')}
+        >
+          <span className="np2-val-lbl">WEIGHT</span>
+          <span className={`np2-val-num ${!previewSet?.weight ? 'is-empty' : ''}`}>
+            {previewSet?.weight || '—'}
+            <span className="u">kg</span>
+          </span>
         </button>
         <button
           type="button"
-          className="np-tool np-tool--rpe"
-          onClick={() => setShowRPE((s) => !s)}
+          className={`np2-val np2-val--r is-field ${active?.field === 'reps' ? 'is-active' : ''}`}
+          onClick={() => onSetField('reps')}
         >
-          <span className="np-tool-rpe-label">RPE</span>
-          <span className="np-tool-rpe-val">{previewSet?.rpe ?? '—'}</span>
+          <span className="np2-val-lbl">REPS</span>
+          <span className={`np2-val-num ${!previewSet?.reps ? 'is-empty' : ''}`}>
+            {previewSet?.reps || '—'}
+          </span>
         </button>
-        <button type="button" className="np-tool np-tool--next" onClick={onNext}>
-          Next →
-        </button>
+        {showE1RM ? (
+          <div className="np2-val np2-val--e1rm">
+            <span className="np2-val-lbl">EST. 1RM</span>
+            <span className={`np2-val-num ${!liveE1RM ? 'is-empty' : ''}`}>
+              {liveE1RM > 0 ? liveE1RM.toFixed(1) : '—'}
+              {liveE1RM > 0 && <span className="u">kg</span>}
+            </span>
+          </div>
+        ) : (
+          <div className="np2-val np2-val--e1rm">
+            <span className="np2-val-lbl">NUDGE</span>
+            <span
+              className={`np2-val-num ${!accessoryNudge ? 'is-empty' : ''}`}
+              style={{ fontSize: '0.75rem', lineHeight: 1.15 }}
+            >
+              {accessoryNudge ? nudgeLabel(accessoryNudge) : '—'}
+            </span>
+          </div>
+        )}
       </div>
 
-      {showRPE ? (
-        <div className="np-rpe-grid">
-          {RPE_VALUES.map((rpe) => (
-            <button
-              key={rpe}
-              type="button"
-              className={`np-rpe-btn ${previewSet?.rpe === rpe ? 'is-active' : ''}`}
-              onClick={() => {
-                onRPE(rpe);
-                setShowRPE(false);
-              }}
-            >
-              <span className="np-rpe-num">{rpe}</span>
-              <span className="np-rpe-tag">{RPE_LABELS[rpe]}</span>
+      <div className="np2-incs">
+        <button type="button" className="np2-inc is-neg" onClick={() => onInc(-5)}>−5</button>
+        <button type="button" className="np2-inc is-neg" onClick={() => onInc(-2.5)}>−2.5</button>
+        <button type="button" className="np2-inc is-neg" onClick={() => onInc(-1)}>−1</button>
+        <button type="button" className="np2-inc" onClick={() => onInc(1)}>+1</button>
+        <button type="button" className="np2-inc" onClick={() => onInc(2.5)}>+2.5</button>
+        <button type="button" className="np2-inc" onClick={() => onInc(5)}>+5</button>
+      </div>
+
+      <div className="np2-body">
+        <div className="np2-keys">
+          {['1','2','3','4','5','6','7','8','9'].map((k) => (
+            <button key={k} type="button" className="np2-key" onClick={() => onKey(k)}>
+              {k}
             </button>
           ))}
+          <button type="button" className="np2-key is-dot" onClick={() => onKey('.')}>·</button>
+          <button type="button" className="np2-key" onClick={() => onKey('0')}>0</button>
+          <button type="button" className="np2-key is-back" onClick={() => onKey('back')} aria-label="Backspace">
+            <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
+              <path d="M6 1L1 7l5 6h11V1H6z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+              <path d="M9 5l4 4M13 5l-4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            </svg>
+          </button>
         </div>
-      ) : (
-        <div className="np-keys-grid">
-          {(['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'back'] as const).map((k) => (
-            <button
-              key={k}
-              type="button"
-              className={`np-key ${k === 'back' ? 'is-back' : ''} ${k === '.' ? 'is-dot' : ''}`}
-              onClick={() => onKey(k)}
-            >
-              {k === 'back' ? (
-                <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
-                  <path d="M6 1L1 7l5 6h11V1H6z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-                  <path d="M9 5l4 4M13 5l-4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                </svg>
-              ) : (
-                k
-              )}
-            </button>
-          ))}
+
+        <div className="np2-rpe">
+          <div className="np2-rpe-head">
+            <span className="lbl">RPE</span>
+            <span className="val">{previewSet && previewSet.rpe > 0 ? previewSet.rpe : '—'}</span>
+          </div>
+          <div className="np2-rpe-list">
+            {RPE_ROWS.map(({ v, t }) => (
+              <button
+                key={v}
+                type="button"
+                className={`np2-rpe-row ${previewSet?.rpe === v ? 'is-active' : ''}`}
+                onClick={() => onRpe(v)}
+              >
+                <span className="n">{v}</span>
+                <span className="t">{t}</span>
+              </button>
+            ))}
+          </div>
         </div>
-      )}
+      </div>
+
+      <div className="np2-foot">
+        <button type="button" className="np2-log" onClick={onLog} disabled={!canLog}>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M2 7l3.5 3.5L12 4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Log set <span className="arrow">→</span>
+        </button>
+      </div>
     </div>
   );
 }
 
-// ─── Exercise block ────────────────────────────────────────────────────────
+// ─── Exercise block v2 ─────────────────────────────────────────────────────
+
+interface SetRowProps {
+  ex: UIExercise;
+  set: UISet;
+  setIdx: number;
+  active: ActiveInput | null;
+  onFocus: (setId: string, field: 'weight' | 'reps') => void;
+  onToggleDone: (setId: string) => void;
+  onApplyTarget: (setId: string) => void;
+  rowRef?: (el: HTMLDivElement | null) => void;
+}
+
+function SetRow({ ex, set, setIdx, active, onFocus, onToggleDone, onApplyTarget, rowRef }: SetRowProps) {
+  const isWA = active?.exId === ex.exId && active.setId === set.id && active.field === 'weight';
+  const isRA = active?.exId === ex.exId && active.setId === set.id && active.field === 'reps';
+  const isActive = isWA || isRA;
+  const isDone = set.done;
+  const prevSet = ex.prevSets[setIdx];
+
+  // Main lifts and Variations (per ADR-0009 / Q5) anchor TARGET on the
+  // previous top set + prescription. Accessories anchor on what was performed
+  // for the same set last time, so the lifter can match it (Double Progression).
+  const useTopAnchor = isMainOrVariation(ex);
+  const targetContent = useTopAnchor ? (
+    ex.prescription ? (
+      <>
+        {ex.prevTop && <span className="w">{ex.prevTop.weight}</span>}
+        <span className="x">×</span>
+        <span className="reps">{ex.prescription.reps}</span>
+        {ex.prescription.rpeTarget != null && (
+          <span className="rpe">@{ex.prescription.rpeTarget}</span>
+        )}
+      </>
+    ) : (
+      <span className="empty">—</span>
+    )
+  ) : prevSet ? (
+    <>
+      <span className="w">{prevSet.weight}</span>
+      <span className="x">×</span>
+      <span className="reps">{prevSet.reps}</span>
+      <span className="rpe">@{prevSet.rpe}</span>
+    </>
+  ) : (
+    <span className="empty">—</span>
+  );
+
+  const targetTitle = useTopAnchor
+    ? ex.prevTop
+      ? `Tap to use previous: ${ex.prevTop.weight}kg × ${ex.prescription?.reps ?? ex.prevTop.reps}`
+      : 'Tap to apply target'
+    : prevSet
+      ? `Tap to use previous: ${prevSet.weight}kg × ${prevSet.reps} @${prevSet.rpe}`
+      : 'No previous set';
+
+  return (
+    <div
+      ref={rowRef}
+      className={`r2 ${isActive ? 'is-active' : ''} ${isDone ? 'is-done' : ''}`}
+      onClick={() => onFocus(set.id, 'weight')}
+    >
+      <div className="r2-num">{setIdx + 1}</div>
+      <button
+        type="button"
+        className="r2-target"
+        onClick={(e) => {
+          e.stopPropagation();
+          onApplyTarget(set.id);
+        }}
+        title={targetTitle}
+      >
+        {targetContent}
+      </button>
+      <button
+        data-set-input
+        type="button"
+        className={`r2-cell ${set.weight ? 'has-val' : ''} ${isWA ? 'is-active' : ''}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onFocus(set.id, 'weight');
+        }}
+      >
+        {set.weight || '—'}
+      </button>
+      <button
+        data-set-input
+        type="button"
+        className={`r2-cell ${set.reps ? 'has-val' : ''} ${isRA ? 'is-active' : ''}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onFocus(set.id, 'reps');
+        }}
+      >
+        {set.reps || '—'}
+      </button>
+      <div className={`r2-cell r2-cell--rpe ${isDone ? 'has-val' : ''}`}>
+        {set.rpe > 0 ? set.rpe : '—'}
+      </div>
+      <button
+        type="button"
+        className="r2-check"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleDone(set.id);
+        }}
+        aria-label="Mark set complete"
+      >
+        {isDone && (
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <path
+              d="M2 6.5l3 3 6-6"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )}
+      </button>
+    </div>
+  );
+}
 
 interface ExerciseBlockProps {
   ex: UIExercise;
@@ -213,31 +522,40 @@ interface ExerciseBlockProps {
   onAddSet: () => void;
   onApplyTarget: (setId: string) => void;
   onDeleteSet: (setId: string) => void;
+  rowRefs: React.MutableRefObject<Record<string, HTMLDivElement | null>>;
 }
 
-function ExerciseBlock({ ex, active, onFocus, onToggleDone, onAddSet, onApplyTarget, onDeleteSet }: ExerciseBlockProps) {
-  // Coerce the string-typed edit buffer to numeric SetLogs once, then defer the
-  // "highest e1RM" rule to the deep e1rm module. topSet's weight/reps > 0 filter
-  // discards blank inputs (parseFloat('') → NaN, NaN > 0 → false).
-  const topE1RM = topSetE1rm(
-    ex.sets.map((s) => ({
-      id: s.id,
-      weight: parseFloat(s.weight),
-      reps: parseInt(s.reps, 10),
-      rpe: s.rpe,
-      timestamp: 0,
-      completed: s.done,
-    })),
-  );
+function ExerciseBlock({
+  ex,
+  active,
+  onFocus,
+  onToggleDone,
+  onAddSet,
+  onApplyTarget,
+  onDeleteSet,
+  rowRefs,
+}: ExerciseBlockProps) {
+  const isCurrent = active?.exId === ex.exId;
 
   return (
-    <div className={`xb ${ex.isMainLift ? 'is-main' : ''}`}>
-      <div className="xb-head">
-        <div className="xb-head-left">
-          {ex.isMainLift && <span className="xb-tag">Main</span>}
-          <h2 className="xb-name">{ex.name}</h2>
+    <div className={`eb2 ${ex.isMainLift ? 'is-main' : ''} ${isCurrent ? 'is-current' : ''}`}>
+      <div className="eb2-head">
+        <div className="eb2-head-l">
+          <div className="eb2-eyebrow">
+            {ex.isMainLift && <span className="tag">MAIN</span>}
+            {ex.muscles.length > 0 && (
+              <span className="mg">{ex.muscles.join(' · ').toUpperCase()}</span>
+            )}
+          </div>
+          <div className="eb2-name">{ex.name}</div>
         </div>
-        <button type="button" className="xb-more" aria-label="More">
+        {ex.prescription && (
+          <span className="eb2-rx">
+            {ex.prescription.sets}×{ex.prescription.reps}
+            {ex.prescription.rpeTarget != null ? ` @${ex.prescription.rpeTarget}` : ''}
+          </span>
+        )}
+        <button type="button" className="eb2-more" aria-label="More">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
             <circle cx="2.5" cy="7" r="1" fill="currentColor" />
             <circle cx="7" cy="7" r="1" fill="currentColor" />
@@ -246,137 +564,153 @@ function ExerciseBlock({ ex, active, onFocus, onToggleDone, onAddSet, onApplyTar
         </button>
       </div>
 
-      {topE1RM > 0 && (
-        <div className="xb-meta">
-          <span className="xb-e1rm">
-            <span className="xb-e1rm-label">Top e1RM</span>
-            <span className="xb-e1rm-val">{topE1RM.toFixed(1)}</span>
-            <span className="xb-e1rm-unit">kg</span>
-          </span>
-        </div>
-      )}
+      {(() => {
+        // Mains/Variations: anchor on the prevTop set ("LAST TOP").
+        // Accessories: summarise the literal last session ("LAST SESSION") so
+        // double-progression-by-reps is legible at a glance.
+        if (isMainOrVariation(ex)) {
+          return ex.prevTop ? (
+            <div className="eb2-meta">
+              <div className="top">
+                <span className="lbl">LAST TOP</span>
+                <span className="val">{ex.prevTop.weight}</span>
+                <span className="u">
+                  kg · {ex.prevTop.reps} reps · @{ex.prevTop.rpe}
+                </span>
+              </div>
+            </div>
+          ) : null;
+        }
+        const summary = summariseLastSession(ex.prevSets);
+        return summary ? (
+          <div className="eb2-meta">
+            <div className="top">
+              <span className="lbl">LAST SESSION</span>
+              <span className="val">{summary.weight}</span>
+              <span className="u">
+                kg · {summary.summary} @{summary.rpe}
+              </span>
+            </div>
+          </div>
+        ) : null;
+      })()}
 
-      <div className="xb-cols">
-        <span className="xb-col-set">Set</span>
-        <span className="xb-col-target">Target</span>
-        <span className="xb-col-input">Weight</span>
-        <span className="xb-col-input">Reps</span>
-        <span className="xb-col-rpe">RPE</span>
-        <span className="xb-col-done" />
+      <div className="eb2-rows">
+        <div className="r2-cols">
+          <span>SET</span>
+          <span>{isMainOrVariation(ex) ? 'TARGET' : 'PREVIOUS'}</span>
+          <span>KG</span>
+          <span>REPS</span>
+          <span>RPE</span>
+          <span></span>
+        </div>
+        {ex.sets.map((s, i) => {
+          const isExtraSet =
+            !ex.prescription || i >= (ex.prescription?.sets ?? Number.POSITIVE_INFINITY);
+          const row = (
+            <SetRow
+              ex={ex}
+              set={s}
+              setIdx={i}
+              active={active}
+              onFocus={onFocus}
+              onToggleDone={onToggleDone}
+              onApplyTarget={onApplyTarget}
+              rowRef={(el) => {
+                const k = `${ex.exId}-${s.id}`;
+                if (el) rowRefs.current[k] = el;
+                else delete rowRefs.current[k];
+              }}
+            />
+          );
+          if (!isExtraSet) return <div key={s.id}>{row}</div>;
+          return (
+            <Swipeable key={s.id} onDelete={() => onDeleteSet(s.id)} trackClassName="r2-swipe">
+              {row}
+            </Swipeable>
+          );
+        })}
       </div>
 
-      {ex.sets.map((s, i) => {
-        const isWA = active?.exId === ex.exId && active.setId === s.id && active.field === 'weight';
-        const isRA = active?.exId === ex.exId && active.setId === s.id && active.field === 'reps';
-        const w = parseFloat(s.weight);
-        const r = parseInt(s.reps, 10);
-        const e1rm =
-          Number.isFinite(w) && Number.isFinite(r) && w > 0 && r > 0 ? e1rm(w, r, s.rpe) : 0;
-        // A set is "non-programmed" when there's no prescription, or when its
-        // index is past the prescribed set count (i.e. user-added via Add Set).
-        const isExtraSet =
-          !ex.prescription || i >= (ex.prescription?.sets ?? Number.POSITIVE_INFINITY);
-        const rowInner = (
-          <div className={`xb-row ${s.done ? 'is-done' : ''} ${isWA || isRA ? 'is-active' : ''}`}>
-            <div className="xb-set-num">{i + 1}</div>
-            <button
-              type="button"
-              className="xb-target"
-              onClick={(e) => {
-                e.stopPropagation();
-                onApplyTarget(s.id);
-              }}
-              title={
-                ex.prevTop
-                  ? `Tap to use previous: ${ex.prevTop.weight}kg × ${ex.prescription?.reps ?? ex.prevTop.reps}`
-                  : 'Tap to apply target'
-              }
-            >
-              {ex.prescription ? (
-                <>
-                  {ex.prevTop && (
-                    <span className="xb-target-w">
-                      {ex.prevTop.weight}
-                      <span className="xb-target-unit">kg</span>
-                    </span>
-                  )}
-                  <span className="xb-target-x">×</span>
-                  <span className="xb-target-reps">{ex.prescription.reps}</span>
-                  {ex.prescription.rpeTarget != null && (
-                    <span className="xb-target-rpe">@{ex.prescription.rpeTarget}</span>
-                  )}
-                </>
-              ) : (
-                <span className="xb-target-empty">—</span>
-              )}
-            </button>
-            <button
-              data-set-input
-              type="button"
-              className={`xb-input ${isWA ? 'is-active' : ''} ${s.weight ? 'has-val' : ''}`}
-              onClick={() => onFocus(s.id, 'weight')}
-            >
-              {s.weight || <span className="xb-ph">kg</span>}
-            </button>
-            <button
-              data-set-input
-              type="button"
-              className={`xb-input ${isRA ? 'is-active' : ''} ${s.reps ? 'has-val' : ''}`}
-              onClick={() => onFocus(s.id, 'reps')}
-            >
-              {s.reps || <span className="xb-ph">reps</span>}
-            </button>
-            <div className="xb-rpe">{s.rpe}</div>
-            <button
-              type="button"
-              className={`xb-check ${s.done ? 'is-done' : ''}`}
-              onClick={() => onToggleDone(s.id)}
-              aria-label="Mark complete"
-            >
-              {s.done && (
-                <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                  <path
-                    d="M2 5.5l2.5 2.5 4.5-4.5"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              )}
-            </button>
-            {e1rm > 0 && <div className="xb-row-e1rm">e1RM {e1rm.toFixed(1)}kg</div>}
-          </div>
-        );
-        if (!isExtraSet) return <div key={s.id}>{rowInner}</div>;
-        return (
-          <Swipeable
-            key={s.id}
-            onDelete={() => onDeleteSet(s.id)}
-            trackClassName="xb-row-swipe"
-          >
-            {rowInner}
-          </Swipeable>
-        );
-      })}
-
-      <button type="button" className="xb-add" onClick={onAddSet}>
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+      <button type="button" className="eb2-addset" onClick={onAddSet}>
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
           <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
-        Add Set
+        ADD SET
       </button>
     </div>
   );
 }
 
+// ─── Rest pill ─────────────────────────────────────────────────────────────
+
+interface RestPillProps {
+  remaining: number;
+  running: boolean;
+  suggested: number;
+  onToggle: () => void;
+}
+
+function RestPill({ remaining, running, suggested, onToggle }: RestPillProps) {
+  if (remaining === 0 && !running) {
+    return (
+      <button
+        type="button"
+        className="ses-rest-pill"
+        onClick={onToggle}
+        title={`Suggested: ${fmtTimerSec(suggested)}`}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="13" r="8" />
+          <path d="M12 9v4l2 2M9 2h6" />
+        </svg>
+        <span className="suggest">REST</span>
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={`ses-rest-pill ${running ? 'is-running' : ''}`}
+      onClick={onToggle}
+    >
+      {running ? (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+      ) : (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7L8 5z" /></svg>
+      )}
+      <span className="val">{fmtTimerSec(remaining)}</span>
+    </button>
+  );
+}
+
 // ─── Main component ────────────────────────────────────────────────────────
+
+export interface SessionStats {
+  doneSets: number;
+  totalSets: number;
+  currentExerciseName?: string;
+}
 
 interface ActiveWorkoutProps {
   onFinish: () => void;
+  onMinimize?: () => void;
+  onDragStart?: () => void;
+  onDrag?: (dy: number) => void;
+  onDragEnd?: (dy: number) => void;
+  onStatsChange?: (stats: SessionStats) => void;
+  showDragHandle?: boolean;
 }
 
-export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
+export function ActiveWorkout({
+  onFinish,
+  onMinimize,
+  onDragStart,
+  onDrag,
+  onDragEnd,
+  onStatsChange,
+  showDragHandle = true,
+}: ActiveWorkoutProps) {
   const activeSession = useTrainingStore((s) => s.activeSession);
   const sessions = useTrainingStore((s) => s.sessions);
   const program = useTrainingStore((s) => s.program);
@@ -393,8 +727,8 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
   const [showAddExercise, setShowAddExercise] = useState(false);
 
   // Resync local state when the store's exercise list changes shape (add, remove,
-  // or session change). We use a fingerprint of the exercise ids — not just the
-  // length — so a delete-then-add of equal count still triggers a rebuild.
+  // or session change). Use a fingerprint of exercise ids so a delete-then-add
+  // of equal count still triggers a rebuild.
   const sessionIdRef = useRef(activeSession?.id);
   const exerciseFingerprintRef = useRef(
     activeSession?.exercises.map((e) => e.exercise.id).join('|') ?? '',
@@ -417,6 +751,15 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
 
   const totalSets = exercises.reduce((s, e) => s + e.sets.length, 0);
   const doneSets = exercises.reduce((s, e) => s + e.sets.filter((x) => x.done).length, 0);
+  const progressPct = totalSets > 0 ? (doneSets / totalSets) * 100 : 0;
+  const currentExName = active
+    ? exercises.find((e) => e.exId === active.exId)?.name
+    : exercises.find((e) => e.sets.some((s) => !s.done))?.name ?? exercises[0]?.name;
+
+  // Bubble stats up so the mini bar reflects them.
+  useEffect(() => {
+    onStatsChange?.({ doneSets, totalSets, currentExerciseName: currentExName });
+  }, [doneSets, totalSets, currentExName, onStatsChange]);
 
   const setIndexFromId = (setId: string): number => {
     const parts = setId.split('-');
@@ -434,11 +777,33 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
     );
   };
 
+  // When the user focuses a cell, the existing value is shown but the next
+  // numeric/dot keystroke replaces it (iOS calculator pattern). This way the
+  // pre-filled target weight is ready to log as-is, but easy to override too.
+  const replaceOnKeyRef = useRef(true);
+
   const handleFocus = (exId: number, setId: string, field: 'weight' | 'reps') => {
     setActive({ exId, setId, field });
+    replaceOnKeyRef.current = true;
   };
 
   const handleToggleDone = (exId: number, setId: string) => {
+    const currentEx = exercises.find((e) => e.exId === exId);
+    const currentSet = currentEx?.sets.find((s) => s.id === setId);
+    // ADR-0006: a set is not "logged and counted" until the lifter has picked
+    // weight, reps, and RPE. Toggling-to-done is blocked if any are missing.
+    // Toggling-to-not-done is always allowed.
+    if (currentSet && !currentSet.done) {
+      const w = parseFloat(currentSet.weight);
+      const r = parseInt(currentSet.reps, 10);
+      if (!Number.isFinite(w) || w <= 0) return;
+      if (!Number.isFinite(r) || r <= 0) return;
+      if (currentSet.rpe <= 0) {
+        // Auto-focus the row so the lifter can pick an RPE on the numpad.
+        setActive({ exId, setId, field: 'reps' });
+        return;
+      }
+    }
     let nextDone = false;
     setExercises((prev) =>
       prev.map((ex) =>
@@ -467,14 +832,20 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
       updates.timestamp = Date.now();
     }
     updateSetInStore(exId, setIndex, updates);
+
+    if (nextDone && set) {
+      const r = parseInt(set.reps, 10);
+      if (Number.isFinite(r) && r > 0) {
+        const rest = suggestRest(r, ex);
+        setRestSuggested(rest);
+        setRestRemaining(rest);
+        setRestRunning(false); // manual start
+      }
+    }
   };
 
   const handleAddSet = (exId: number) => {
-    // Persist first so the SetLog gets a real id from the store.
     addSetToStore(exId);
-    // Mirror in local UI state — the resync effect only fires when the outer
-    // exercises list grows, not when an inner sets array grows, so we have to
-    // append here too or the new row won't render.
     setExercises((prev) =>
       prev.map((ex) => {
         if (ex.exId !== exId) return ex;
@@ -488,7 +859,9 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
               id: `${exId}-${n}`,
               weight: last?.weight ?? '',
               reps: '',
-              rpe: last?.rpe ?? ex.prescription?.rpeTarget ?? 7,
+              // rpe=0 sentinel per ADR-0006. The lifter picks it on the numpad
+              // before the set can be marked complete.
+              rpe: 0,
               done: false,
               programRPE: ex.prescription?.rpeTarget,
             },
@@ -506,30 +879,42 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
         ex.exId !== exId ? ex : { ...ex, sets: ex.sets.filter((s) => s.id !== setId) },
       ),
     );
-    // If the deleted set was the active focus, clear it.
-    setActive((cur) =>
-      cur && cur.exId === exId && cur.setId === setId ? null : cur,
-    );
+    setActive((cur) => (cur && cur.exId === exId && cur.setId === setId ? null : cur));
   };
 
   const handleDeleteExercise = (exId: number) => {
     removeExerciseFromStore(exId);
-    // No need to mirror locally — the resync effect detects the fingerprint
-    // change and rebuilds local state from the authoritative store.
     setActive((cur) => (cur && cur.exId === exId ? null : cur));
   };
 
   const handleApplyTarget = (exId: number, setId: string) => {
     const ex = exercises.find((e) => e.exId === exId);
     if (!ex) return;
-    const weight = ex.prevTop ? String(ex.prevTop.weight) : '';
-    const reps = ex.prescription?.reps ?? (ex.prevTop ? String(ex.prevTop.reps) : '');
-    const repsParsed = parseInt(reps, 10);
-    const rpe = ex.prescription?.rpeTarget ?? ex.prevTop?.rpe ?? 7;
-    updateSetLocal(exId, setId, { weight, reps, rpe });
     const setIndex = setIndexFromId(setId);
-    const patch: Partial<SetLog> = { rpe };
-    if (ex.prevTop) patch.weight = ex.prevTop.weight;
+    // Accessory lifts pull from the matching set of the previous session; main
+    // lifts pull from the prescription (sets × prescribed reps @ rpeTarget,
+    // with weight from the previous top set).
+    const prevSet = !isMainOrVariation(ex) ? ex.prevSets[setIndex] : undefined;
+    const weight = prevSet
+      ? String(prevSet.weight)
+      : ex.prevTop
+        ? String(ex.prevTop.weight)
+        : '';
+    const reps = prevSet
+      ? String(prevSet.reps)
+      : ex.prescription?.reps ?? (ex.prevTop ? String(ex.prevTop.reps) : '');
+    const repsParsed = parseInt(reps, 10);
+    // ADR-0006: tapping TARGET is explicit consent, so prescribed/prev RPE can
+    // be applied — but we never invent a default 7. If no source has an rpe,
+    // the lifter must still pick one on the numpad before logging.
+    const rpe = prevSet?.rpe ?? ex.prescription?.rpeTarget ?? ex.prevTop?.rpe ?? 0;
+    const uiPatch: Partial<UISet> = { weight, reps };
+    if (rpe > 0) uiPatch.rpe = rpe;
+    updateSetLocal(exId, setId, uiPatch);
+    const patch: Partial<SetLog> = {};
+    if (rpe > 0) patch.rpe = rpe;
+    if (prevSet) patch.weight = prevSet.weight;
+    else if (ex.prevTop) patch.weight = ex.prevTop.weight;
     if (Number.isFinite(repsParsed)) patch.reps = repsParsed;
     updateSetInStore(exId, setIndex, patch);
   };
@@ -548,6 +933,7 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
   const handleNumpadKey = (key: string) => {
     if (!active) return;
     const { exId, setId, field } = active;
+    const shouldReplace = replaceOnKeyRef.current;
     let nextValue = '';
     setExercises((prev) =>
       prev.map((ex) => {
@@ -558,17 +944,25 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
             if (s.id !== setId) return s;
             const cur = s[field];
             let next: string;
-            if (key === 'back') next = cur.slice(0, -1);
-            else if (key === '.') {
-              if (cur.includes('.')) return s;
-              next = cur + '.';
-            } else next = cur + key;
+            if (key === 'back') {
+              next = cur.slice(0, -1);
+            } else if (key === '.') {
+              if (field === 'reps') return s;
+              if (shouldReplace) next = '0.';
+              else if (cur.includes('.')) return s;
+              else next = cur + '.';
+            } else {
+              // Numeric key — first press after focus replaces the (possibly
+              // pre-filled) value so the user can just type their own.
+              next = shouldReplace ? key : cur + key;
+            }
             nextValue = next;
             return { ...s, [field]: next };
           }),
         };
       }),
     );
+    replaceOnKeyRef.current = false;
     const setIndex = setIndexFromId(setId);
     const numeric = field === 'weight' ? parseFloat(nextValue) : parseInt(nextValue, 10);
     if (Number.isFinite(numeric)) {
@@ -578,14 +972,37 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
     }
   };
 
-  const handleNext = () => {
+  const handleInc = (delta: number) => {
     if (!active) return;
-    const all = getAllInputs();
-    const idx = all.findIndex(
-      (i) => i.exId === active.exId && i.setId === active.setId && i.field === active.field,
+    const { exId, setId, field } = active;
+    let nextValue = '';
+    setExercises((prev) =>
+      prev.map((ex) => {
+        if (ex.exId !== exId) return ex;
+        return {
+          ...ex,
+          sets: ex.sets.map((s) => {
+            if (s.id !== setId) return s;
+            if (field === 'weight') {
+              const v = parseFloat(s.weight) || 0;
+              const next = Math.max(0, +(v + delta).toFixed(2));
+              nextValue = String(next);
+              return { ...s, weight: nextValue };
+            }
+            const v = parseInt(s.reps, 10) || 0;
+            const next = Math.max(0, v + Math.round(delta));
+            nextValue = String(next);
+            return { ...s, reps: nextValue };
+          }),
+        };
+      }),
     );
-    if (idx >= 0 && idx < all.length - 1) setActive(all[idx + 1]);
-    else setActive(null);
+    replaceOnKeyRef.current = false;
+    const setIndex = setIndexFromId(setId);
+    const numeric = field === 'weight' ? parseFloat(nextValue) : parseInt(nextValue, 10);
+    if (Number.isFinite(numeric)) {
+      updateSetInStore(exId, setIndex, { [field]: numeric });
+    }
   };
 
   const handleRPE = (rpe: number) => {
@@ -595,13 +1012,121 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
     updateSetInStore(active.exId, setIndex, { rpe });
   };
 
+  const handleLogActive = () => {
+    if (!active) return;
+    const ex = exercises.find((e) => e.exId === active.exId);
+    const set = ex?.sets.find((s) => s.id === active.setId);
+    if (!set || !parseFloat(set.weight) || !parseInt(set.reps, 10) || set.rpe <= 0) return;
+    // Mark done, persist, suggest rest, advance to next set.
+    updateSetLocal(active.exId, active.setId, { done: true });
+    const setIndex = setIndexFromId(active.setId);
+    updateSetInStore(active.exId, setIndex, {
+      completed: true,
+      weight: parseFloat(set.weight),
+      reps: parseInt(set.reps, 10),
+      rpe: set.rpe,
+      timestamp: Date.now(),
+    });
+    const rest = suggestRest(parseInt(set.reps, 10), ex);
+    setRestSuggested(rest);
+    setRestRemaining(rest);
+    setRestRunning(false);
+    // Advance to next set within block, else first set of next block.
+    const all = getAllInputs().filter((i) => i.field === 'weight');
+    const idx = all.findIndex((i) => i.exId === active.exId && i.setId === active.setId);
+    if (idx >= 0 && idx < all.length - 1) {
+      setActive(all[idx + 1]);
+    }
+  };
+
+  const activeSet = active
+    ? exercises.find((e) => e.exId === active.exId)?.sets.find((s) => s.id === active.setId) ?? null
+    : null;
+  const canLog = !!(
+    activeSet &&
+    parseFloat(activeSet.weight) > 0 &&
+    parseInt(activeSet.reps, 10) > 0 &&
+    activeSet.rpe > 0
+  );
+
+  // Auto-scroll active row into view above the numpad.
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const stackRef = useRef<HTMLDivElement>(null);
+  const numpadRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!active) return;
+    const k = `${active.exId}-${active.setId}`;
+    const row = rowRefs.current[k];
+    const stack = stackRef.current;
+    if (!row || !stack) return;
+    const id = requestAnimationFrame(() => {
+      const stackRect = stack.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const npEl = numpadRef.current;
+      const numpadOpen = npEl?.classList.contains('is-visible');
+      const numpadHeight = numpadOpen ? npEl?.offsetHeight ?? 480 : 0;
+      const headroom = 56;
+      const buffer = 20;
+      const visibleTop = stackRect.top + headroom;
+      const visibleBottom = stackRect.bottom - numpadHeight - buffer;
+      if (rowRect.top < visibleTop) {
+        stack.scrollBy({ top: rowRect.top - visibleTop, behavior: 'smooth' });
+      } else if (rowRect.bottom > visibleBottom) {
+        stack.scrollBy({ top: rowRect.bottom - visibleBottom, behavior: 'smooth' });
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [active]);
+
+  // Manual rest timer.
+  const [restRemaining, setRestRemaining] = useState(0);
+  const [restRunning, setRestRunning] = useState(false);
+  const [restSuggested, setRestSuggested] = useState(180);
+  useEffect(() => {
+    if (!restRunning) return;
+    const t = setInterval(() => {
+      setRestRemaining((s) => {
+        if (s <= 1) {
+          setRestRunning(false);
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [restRunning]);
+
+  // Drag-down gesture handlers — parent decides what the drag does.
+  const dragState = useRef<{ active: boolean; startY: number }>({ active: false, startY: 0 });
+  const [showHint, setShowHint] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setShowHint(false), 3200);
+    return () => clearTimeout(t);
+  }, []);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    dragState.current = { active: true, startY: e.clientY };
+    onDragStart?.();
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // pointer capture may not be supported
+    }
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragState.current.active) return;
+    const dy = Math.max(0, e.clientY - dragState.current.startY);
+    onDrag?.(dy);
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    if (!dragState.current.active) return;
+    const dy = Math.max(0, e.clientY - dragState.current.startY);
+    dragState.current.active = false;
+    onDragEnd?.(dy);
+  };
+
   const handleAddExercises = (newExercises: TrainingExercise[]) => {
     if (!activeSession) return;
-    // Just persist to the store — the resync useEffect detects the length
-    // change and rebuilds local UI state from the authoritative store data.
-    // This guarantees each new exercise's local exId equals its real store
-    // index (positional), which all later mutations (updateSet, removeSet,
-    // addSetToExercise, removeExercise) require.
     newExercises.forEach((ex) => {
       addExerciseToStore({ exercise: ex, sets: [] });
     });
@@ -620,46 +1145,79 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
         const t = e.target as HTMLElement;
         if (!t.closest('[data-numpad]') && !t.closest('[data-set-input]')) setActive(null);
       }}
+      style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
     >
-      <div className="as-topbar">
-        {/* <button type="button" className="as-cancel" onClick={onFinish} aria-label="Collapse">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path
-              d="M4 6l4 4 4-4"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button> */}
-        <div className="as-timer">
-          <span className="as-timer-dot" />
-          <span className="as-timer-val">{formattedTime}</span>
+      {showDragHandle && (
+        <div
+          className={`as-grab ${showHint ? 'show-hint' : ''}`}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+        >
+          <span className="as-grab-bar" />
+          <span className="as-grab-hint">Drag down to minimize</span>
         </div>
-        <button type="button" className="as-finish" onClick={onFinish}>
+      )}
+
+      <div className="ses-top">
+        <button
+          type="button"
+          className="ses-top-back"
+          onClick={onMinimize ?? onFinish}
+          aria-label="Minimize"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        <div className="ses-top-meta">
+          <div className="ses-top-eyebrow">
+            <span>SESSION IN PROGRESS</span>
+          </div>
+          <div className="ses-top-day">{cleanName}</div>
+        </div>
+        <button type="button" className="ses-top-finish" onClick={onFinish}>
           Finish
         </button>
       </div>
 
-      <div className="as-head">
-        <div className="as-head-eyebrow">
-          <span>Session in progress</span>
-          <span className="as-head-dot">·</span>
-          <span>
-            {doneSets}/{totalSets} sets logged
-          </span>
+      <div className="ses-strip">
+        <div className="ses-strip-time">
+          <span className="ses-strip-time-dot" />
+          <span className="ses-strip-time-val">{formattedTime}</span>
         </div>
-        <h1 className="as-head-title">{cleanName}</h1>
-        <div className="as-head-bar">
-          <div
-            className="as-head-bar-fill"
-            style={{ width: `${(doneSets / Math.max(totalSets, 1)) * 100}%` }}
-          />
+        <div className="ses-strip-progress">
+          <div className="ses-strip-bar">
+            <div className="ses-strip-bar-fill" style={{ width: `${progressPct}%` }} />
+          </div>
+          <div className="ses-strip-label">
+            <span className="v">{doneSets}</span>
+            <span>/ {totalSets}</span>
+            <span className="sep">·</span>
+            <span>{totalSets > 0 ? Math.round(progressPct) : 0}%</span>
+          </div>
         </div>
+        <RestPill
+          remaining={restRemaining}
+          running={restRunning}
+          suggested={restSuggested}
+          onToggle={() => {
+            if (restRemaining === 0) {
+              setRestRemaining(restSuggested);
+              setRestRunning(true);
+            } else {
+              setRestRunning((r) => !r);
+            }
+          }}
+        />
       </div>
 
-      <div className="as-stack" style={{ paddingBottom: active ? 360 : 80 }}>
+      <div
+        className="ses-stack"
+        ref={stackRef}
+        style={{ paddingBottom: active ? 520 : 96 }}
+      >
         {exercises.map((ex) => {
           const block = (
             <ExerciseBlock
@@ -670,15 +1228,28 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
               onAddSet={() => handleAddSet(ex.exId)}
               onApplyTarget={(setId) => handleApplyTarget(ex.exId, setId)}
               onDeleteSet={(setId) => handleDeleteSet(ex.exId, setId)}
+              rowRefs={rowRefs}
             />
           );
-          // Whole exercise is deletable when it has no prescription
-          // (added mid-session via Add Exercise, or part of an empty workout).
-          if (ex.prescription) return <div key={ex.exId}>{block}</div>;
+          // Both prescribed and bonus exercises are swipe-deletable (Q8).
+          // Prescribed deletes prompt a confirm — they represent the ADR-0005
+          // "swap-out" case (e.g. squat → leg press) and should be intentional.
+          const isPrescribed = !!ex.prescription;
+          const onDelete = isPrescribed
+            ? () => {
+                if (
+                  window.confirm(
+                    `Skip ${ex.name}? It will appear as "prescribed but not done" on the Summary.`,
+                  )
+                ) {
+                  handleDeleteExercise(ex.exId);
+                }
+              }
+            : () => handleDeleteExercise(ex.exId);
           return (
             <Swipeable
               key={ex.exId}
-              onDelete={() => handleDeleteExercise(ex.exId)}
+              onDelete={onDelete}
               className="xb-swipe-shell"
               revealWidth={96}
             >
@@ -698,18 +1269,24 @@ export function ActiveWorkout({ onFinish }: ActiveWorkoutProps) {
         </button>
       </div>
 
-      {createPortal(
-        <Numpad
-          visible={active !== null}
-          active={active}
-          exercises={exercises}
-          onKey={handleNumpadKey}
-          onHide={() => setActive(null)}
-          onNext={handleNext}
-          onRPE={handleRPE}
-        />,
-        document.body,
-      )}
+      <Numpad
+        visible={active !== null}
+        active={active}
+        exercises={exercises}
+        onKey={handleNumpadKey}
+        onClose={() => setActive(null)}
+        onLog={handleLogActive}
+        canLog={canLog}
+        onSetField={(field) => {
+          if (!active) return;
+          setActive({ ...active, field });
+          replaceOnKeyRef.current = true;
+        }}
+        onInc={handleInc}
+        onRpe={handleRPE}
+        numpadRef={numpadRef}
+      />
+
       <AddExerciseSheet
         visible={showAddExercise}
         sessions={sessions}

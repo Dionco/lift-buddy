@@ -34,6 +34,10 @@ _Avoid_: target, plan
 
 **Session**:
 A record of what the lifter actually did in one workout — logged sets, **Readiness** check-in, and any notes. Optionally tied to a programmed **Day** via `programDayId`. A Session describes reality; it does not enforce the program.
+
+A Session reaches the persisted `sessions[]` list **only** when the lifter taps **Finish** (which routes through the **Session Summary**). Tapping **Cancel** discards the in-progress Session — including any sets logged so far. The lifter who walks away from a partial workout but wants to keep the record must tap Finish, even on an incomplete Session. This is intentional: the act of saving is explicit, never implicit.
+
+At Finish time, the Session is normalised before it lands in `sessions[]`: pre-allocated placeholder rows the lifter never logged are dropped (`completed: false && weight === 0`), and **ExerciseLogs** whose `sets[]` ends up empty after that strip are dropped as well. This keeps the "absence is the signal" invariant at both the **Set** and the **ExerciseLog** layer (see ADR-0005, ADR-0006).
 _Avoid_: workout (when referring to logged data — see ambiguity below)
 
 **Ad-Hoc Session**:
@@ -67,7 +71,7 @@ The sets following a **Top Set**, performed at a reduced load (typically same re
 _Avoid_: assistance sets, secondary sets
 
 **Warmup Set**:
-A set performed below working intensity to prepare for the **Top Set** or **Working Sets**. Not logged for **e1RM**.
+A set performed below working intensity to prepare for the **Top Set** or **Working Sets**. **Not recorded** — the active session has no warmup affordance and warmup ramps happen off-app. Only working sets become **Sets** on the **Session**. Downstream filters (`rpe >= 7` for volume, `weight > 0 && completed` for top set) remain as defensive backstops against legacy data, but warmup-tracking is an explicit non-feature.
 _Avoid_: ramp set
 
 **Readiness**:
@@ -106,7 +110,7 @@ The canonical answer to "is the lifter getting stronger on this exercise?" Diffe
 _Avoid_: progress (when ambiguous with general progression talk)
 
 **Double Progression**:
-The standard accessory progress rule: pick a rep range (e.g. 8–12). Each session, add reps until hitting the top of the range. Once you hit the top reps for all prescribed sets at the target RPE, add load and drop back to the bottom of the range. The progress signal for accessories.
+The standard accessory progress rule: pick a rep range (e.g. 8–12). Each session, add reps until hitting the top of the range. Once **all** prescribed sets hit the top of the range at an RPE **at or below** the prescription's `rpeTarget`, add load and drop back to the bottom of the range. The progress signal for accessories. See ADR-0011 for the strict-rule rationale.
 
 **Personal Record (PR)**:
 A new all-time-high top-set **e1RM** for an exercise (any rep range). Celebratory; surfaced in the Session Summary as a flourish. Independent of the **Progress Signal** — a PR is a moment, the slope is a trend. Tracked for every exercise but rep-range caveats apply (a 10-rep PR and a 3-rep PR are different milestones).
@@ -165,7 +169,7 @@ _Avoid_: tired, burnout
 > **Domain expert:** "Three logged exercises: leg press, RDL, leg curl, plus the curls as a **Bonus Exercise**. Squat is a **Prescribed-but-Skipped Exercise** — the Summary shows it as 'prescribed but not done', but we don't store any fake squat sets. The Session is reality, not the prescription."
 
 > **Dev:** "Lifter starts Day 4, bombs the warmup, walks out. Comes back two hours later, retries from scratch. Two Sessions or one?"
-> **Domain expert:** "Two. Both reference Day 4. The first is flagged incomplete; the second the lifter marks as the one that 'counts' on the Summary. The cursor advances based on that explicit choice."
+> **Domain expert:** "Two — but only if the lifter tapped **Finish** on the bombed session before leaving. Both reference Day 4; the first is incomplete; on the second's Summary the lifter marks which one 'counts' so the cursor advances on the right one. If the lifter just walked out without tapping Finish — or tapped **Cancel** in the mini bar — the first session is gone. Saving is always explicit."
 
 > **Dev:** "Prescription says 3×3. Set 1 they got 3, set 2 they got 3, set 3 they grinded out 2 and racked it. How is set 3 stored?"
 > **Domain expert:** "`weight: <whatever>, reps: 2, rpe: 10, completed: true`. The 'missed rep' is derived by comparing against the **Prescription** — the **Set** itself just records what happened."

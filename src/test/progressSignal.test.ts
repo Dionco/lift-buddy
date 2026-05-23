@@ -3,10 +3,11 @@ import {
   fatigueSignal,
   mainLiftProgressSignal,
   accessoryProgressSignal,
+  nextAccessorySuggestion,
   progressSignal,
   repRangeBucket,
 } from '@/lib/progressSignal';
-import { Exercise, Session, SetLog } from '@/types/training';
+import { Exercise, Session, SetLog, SetPrescription } from '@/types/training';
 
 const squat: Exercise = {
   id: 'sq',
@@ -171,6 +172,94 @@ describe('accessoryProgressSignal', () => {
     ];
     const sig = accessoryProgressSignal(sessions, curl);
     expect(sig!.trending).toBe('down');
+  });
+});
+
+describe('nextAccessorySuggestion (ADR-0011 strict double progression)', () => {
+  const range812: SetPrescription = { sets: 3, reps: '8-12', rpeTarget: 8 };
+  const flat5: SetPrescription = { sets: 3, reps: '5', rpeTarget: 8 };
+  const noRpe: SetPrescription = { sets: 3, reps: '8-12' };
+
+  it('returns first-time when there are no prior completed sets', () => {
+    expect(nextAccessorySuggestion([], range812)).toEqual({ kind: 'first-time' });
+  });
+
+  it('treats placeholder zero-weight rows as no prior data', () => {
+    const placeholders: SetLog[] = [
+      { id: 'p1', weight: 0, reps: 0, rpe: 8, timestamp: 0, completed: false },
+    ];
+    expect(nextAccessorySuggestion(placeholders, range812)).toEqual({ kind: 'first-time' });
+  });
+
+  it('treats rpe=0 sets (unset sentinel) as no prior data', () => {
+    // Even if the lifter typed weight+reps, an RPE-unset set has no effort
+    // signal — pretend it never happened.
+    const rpeUnset: SetLog[] = [
+      { id: 'u1', weight: 15, reps: 12, rpe: 0, timestamp: 0, completed: true },
+    ];
+    expect(nextAccessorySuggestion(rpeUnset, range812)).toEqual({ kind: 'first-time' });
+  });
+
+  it('fires add-load when ALL sets hit upper bound at-or-below rpeTarget', () => {
+    const prev = [set(15, 12, 8), set(15, 12, 8), set(15, 12, 8)];
+    const out = nextAccessorySuggestion(prev, range812);
+    expect(out).toEqual({ kind: 'add-load', previousLoad: 15, previousReps: 12 });
+  });
+
+  it('does NOT fire add-load when one set was over the rpe target (effort drift)', () => {
+    // All at top reps, but the last set was harder than prescribed — earned by working
+    // too hard, not by genuine capacity.
+    const prev = [set(15, 12, 8), set(15, 12, 8), set(15, 12, 9)];
+    const out = nextAccessorySuggestion(prev, range812);
+    expect(out.kind).not.toBe('add-load');
+  });
+
+  it('does NOT fire add-load when only some sets hit the top', () => {
+    const prev = [set(15, 12, 8), set(15, 11, 8), set(15, 10, 8)];
+    const out = nextAccessorySuggestion(prev, range812);
+    expect(out).toEqual({ kind: 'add-reps', load: 15, targetReps: 11, rpe: 8 });
+  });
+
+  it('does NOT fire add-load when the lifter did fewer than prescribed sets', () => {
+    // Two sets, both at top — but prescription called for three.
+    const prev = [set(15, 12, 7.5), set(15, 12, 7.5)];
+    const out = nextAccessorySuggestion(prev, range812);
+    expect(out.kind).not.toBe('add-load');
+  });
+
+  it('suggests add-reps clamped at the upper bound when last set is below top', () => {
+    const prev = [set(15, 9, 8), set(15, 9, 8), set(15, 9, 8)];
+    const out = nextAccessorySuggestion(prev, range812);
+    expect(out).toEqual({ kind: 'add-reps', load: 15, targetReps: 10, rpe: 8 });
+  });
+
+  it('falls through to match when last set is already at top but rpe drift blocks add-load', () => {
+    // First two sets fine, last hit top but at higher RPE — not a load bump, but no
+    // room to add reps either.
+    const prev = [set(15, 11, 7), set(15, 11, 7), set(15, 12, 9)];
+    const out = nextAccessorySuggestion(prev, range812);
+    expect(out).toEqual({ kind: 'match', load: 15, reps: 12, rpe: 9 });
+  });
+
+  it('treats a single-number prescription as a degenerate range', () => {
+    // "5" reps means lower=upper=5. All sets at 5 reps at or below rpeTarget → add-load.
+    const prev = [set(100, 5, 7), set(100, 5, 7.5), set(100, 5, 8)];
+    const out = nextAccessorySuggestion(prev, flat5);
+    expect(out.kind).toBe('add-load');
+  });
+
+  it('ignores the RPE constraint when prescription has no rpeTarget', () => {
+    // All at top, RPE was 9.5 — but no target was set, so add-load still fires.
+    const prev = [set(15, 12, 9.5), set(15, 12, 9.5), set(15, 12, 9.5)];
+    const out = nextAccessorySuggestion(prev, noRpe);
+    expect(out.kind).toBe('add-load');
+  });
+
+  it('tolerates the en-dash variant in the prescription string', () => {
+    const enDash: SetPrescription = { sets: 3, reps: '8–12', rpeTarget: 8 };
+    const prev = [set(15, 9, 8), set(15, 9, 8), set(15, 9, 8)];
+    const out = nextAccessorySuggestion(prev, enDash);
+    expect(out).toEqual({ kind: 'add-reps', load: 15, targetReps: 10, rpe: 8 });
   });
 });
 

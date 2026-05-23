@@ -53,6 +53,16 @@ describe('topSet', () => {
     expect(topSet([set(0, 5, 7), set(100, 0, 7)])).toBeNull();
   });
 
+  it('skips sets with rpe=0 (the unset sentinel from ADR-0006)', () => {
+    // A SetLog whose RPE was never picked must not enter the top-set
+    // comparison — the e1RM formula degenerates and the Fatigue Signal would
+    // be contaminated by fabricated effort.
+    expect(topSet([set(100, 5, 0, true)])).toBeNull();
+    // But a valid RPE alongside an rpe=0 set is still found.
+    const valid = set(100, 5, 8, true);
+    expect(topSet([set(100, 5, 0, true), valid])).toBe(valid);
+  });
+
   it('selects the set with the highest e1RM, not the highest weight', () => {
     const heavyLowEffort = set(150, 3, 7); // RPE 7 → 3 RIR
     const lightHighEffort = set(100, 5, 10); // RPE 10 → 0 RIR
