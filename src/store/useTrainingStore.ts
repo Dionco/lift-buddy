@@ -171,13 +171,27 @@ function migrate(persistedState: unknown, version: number): TrainingState {
     const userSessions = (state.sessions ?? []).filter((s) => isUserLogged(s.id));
     state.sessions = [...sampleSessions, ...userSessions];
   }
+  if (version < 4) {
+    // v4: enforce the newest-first Session-order convention. `finishSession`
+    // prepends new Sessions, but the v0–v3 seed/migration left `sessions`
+    // oldest-first. The order-sensitive lib functions (`fatigueSignal`,
+    // `recentTopSetE1RMs`, `lastTopSet`, `mainLiftProgressSignal`) all assume
+    // newest-first — an oldest-first array silently fed them the wrong end of
+    // history, so fatigue/progress read the lifter's first weeks, not the last.
+    if (Array.isArray(state.sessions)) {
+      state.sessions = [...state.sessions].sort((a, b) => b.startTime - a.startTime);
+    }
+  }
   return state as TrainingState;
 }
 
 export const useTrainingStore = create<TrainingState>()(
   persist(
     (set, get) => ({
-      sessions: sampleSessions,
+      // Newest-first — the Session-order convention `finishSession` (prepend)
+      // and every order-sensitive lib function rely on. `sampleSessions` is
+      // generated oldest-first, so reverse it here.
+      sessions: [...sampleSessions].reverse(),
       program: sampleProgram,
       activeSession: null,
       restTimerDuration: 120,
@@ -322,7 +336,7 @@ export const useTrainingStore = create<TrainingState>()(
     }),
     {
       name: 'training-store',
-      version: 3,
+      version: 4,
       migrate: (persistedState, version) => migrate(persistedState, version),
     }
   )
