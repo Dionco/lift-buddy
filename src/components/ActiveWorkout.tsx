@@ -6,6 +6,7 @@ import {
   ExerciseLog,
   Session,
   SetLog,
+  TrainingMaxes,
 } from '@/types/training';
 import { e1rm as e1rmFn, lastTopSet, lastSessionSets } from '@/lib/e1rm';
 import { suggestRest } from '@/lib/restTimer';
@@ -13,6 +14,7 @@ import {
   nextAccessorySuggestion,
   type AccessorySuggestion,
 } from '@/lib/progressSignal';
+import { calculatePrescribedWeight } from '@/lib/loadCalc';
 import { AddExerciseSheet } from './AddExerciseSheet';
 import { Swipeable } from './Swipeable';
 
@@ -36,7 +38,7 @@ interface UIExercise {
    *  deadlift surcharge on rest suggestions. */
   relatedTo?: string;
   muscles: string[];
-  prescription?: { sets: number; reps: string; rpeTarget?: number };
+  prescription?: { sets: number; reps: string; rpeTarget?: number; notes?: string };
   prevTop: SetLog | null;
   /** Completed sets from the most recent session that performed this exercise.
    *  Used by the PREVIOUS column on accessory lifts. */
@@ -55,6 +57,8 @@ function buildInitial(
   programDayId: string | undefined,
   program: ReturnType<typeof useTrainingStore.getState>['program'],
   sessions: Session[],
+  trainingMaxes: TrainingMaxes | null,
+  loadingIncrement: number,
 ): UIExercise[] {
   if (!activeSessionExercises) return [];
   const programDay =
@@ -67,8 +71,22 @@ function buildInitial(
         ]
       : undefined;
 
+  // Track which programDay exercises have been matched. The same exercise can
+  // appear multiple times in one day (ascending triples, MR-sets + back-off) —
+  // each session log slot consumes its prescription in order.
+  const consumed = new Set<number>();
   return activeSessionExercises.map((log, exId) => {
-    const pe = programDay?.exercises.find((p) => p.exercise.id === log.exercise.id);
+    let peIdx = -1;
+    if (programDay) {
+      peIdx = programDay.exercises.findIndex(
+        (p, i) => !consumed.has(i) && p.exercise.id === log.exercise.id,
+      );
+      if (peIdx >= 0) consumed.add(peIdx);
+    }
+    const pe = peIdx >= 0 ? programDay!.exercises[peIdx] : undefined;
+    const prescribedWeight = pe
+      ? calculatePrescribedWeight(pe.prescription, pe.exercise, trainingMaxes, loadingIncrement)
+      : null;
     const prevTop = lastTopSet(sessions, log.exercise.id);
     const prevSets = lastSessionSets(sessions, log.exercise.id);
     // Pre-fill the editable buffer so the user can just confirm + log without
@@ -94,9 +112,14 @@ function buildInitial(
       prevSets,
       sets: log.sets.map((s, i) => {
         const prevSet = prevSets[i];
-        const fallbackWeight = useTopAnchor
-          ? prevTop?.weight
-          : (prevSet?.weight ?? prevTop?.weight);
+        // Order: explicit prescribed weight (% × 1RM) > previous top > previous
+        // per-set weight. The prescribed weight is the strongest signal — the
+        // program says "do X kg today" — so it overrides historical anchors.
+        const fallbackWeight = prescribedWeight ?? (
+          useTopAnchor
+            ? prevTop?.weight
+            : (prevSet?.weight ?? prevTop?.weight)
+        );
         const fallbackReps = useTopAnchor
           ? prescribedRepsLB
           : (prevSet?.reps ? String(prevSet.reps) : prescribedRepsLB);
@@ -548,6 +571,9 @@ function ExerciseBlock({
             )}
           </div>
           <div className="eb2-name">{ex.name}</div>
+          {ex.prescription?.notes && (
+            <div className="eb2-note">{ex.prescription.notes}</div>
+          )}
         </div>
         {ex.prescription && (
           <span className="eb2-rx">
@@ -714,6 +740,8 @@ export function ActiveWorkout({
   const activeSession = useTrainingStore((s) => s.activeSession);
   const sessions = useTrainingStore((s) => s.sessions);
   const program = useTrainingStore((s) => s.program);
+  const trainingMaxes = useTrainingStore((s) => s.trainingMaxes);
+  const loadingIncrement = useTrainingStore((s) => s.loadingIncrement);
   const addExerciseToStore = useTrainingStore((s) => s.addExercise);
   const updateSetInStore = useTrainingStore((s) => s.updateSet);
   const addSetToStore = useTrainingStore((s) => s.addSetToExercise);
@@ -721,7 +749,7 @@ export function ActiveWorkout({
   const removeExerciseFromStore = useTrainingStore((s) => s.removeExercise);
 
   const [exercises, setExercises] = useState<UIExercise[]>(() =>
-    buildInitial(activeSession?.exercises, activeSession?.programDayId, program, sessions),
+    buildInitial(activeSession?.exercises, activeSession?.programDayId, program, sessions, trainingMaxes, loadingIncrement),
   );
   const [active, setActive] = useState<ActiveInput | null>(null);
   const [showAddExercise, setShowAddExercise] = useState(false);
@@ -740,12 +768,12 @@ export function ActiveWorkout({
     const exercisesChanged = exerciseFingerprintRef.current !== fingerprint;
     if (sessionChanged || exercisesChanged) {
       setExercises(
-        buildInitial(activeSession.exercises, activeSession.programDayId, program, sessions),
+        buildInitial(activeSession.exercises, activeSession.programDayId, program, sessions, trainingMaxes, loadingIncrement),
       );
       sessionIdRef.current = activeSession.id;
       exerciseFingerprintRef.current = fingerprint;
     }
-  }, [activeSession, program, sessions]);
+  }, [activeSession, program, sessions, trainingMaxes, loadingIncrement]);
 
   const formattedTime = useElapsedTime(activeSession?.startTime ?? Date.now());
 

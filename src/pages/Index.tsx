@@ -1,26 +1,32 @@
 import { useMemo, useState } from 'react';
 import { useTrainingStore } from '@/store/useTrainingStore';
-import { ExerciseLog, ReadinessCheckIn } from '@/types/training';
+import { ExerciseLog, ReadinessCheckIn, TrainingMaxes } from '@/types/training';
+import { isSameCalendarDay } from '@/lib/sameCalendarDay';
 import { BottomNav } from '@/components/BottomNav';
 import { TrainTab } from '@/components/TrainTab';
 import { ProgressTab } from '@/components/ProgressTab';
 import { HistoryTab } from '@/components/HistoryTab';
 import { ProgramOverview } from '@/components/ProgramOverview';
 import { ReadinessCheck } from '@/components/ReadinessCheck';
+import { TrainingMaxesSetup } from '@/components/TrainingMaxesSetup';
 import { ActiveWorkout, type SessionStats } from '@/components/ActiveWorkout';
 import { WorkoutMiniBar } from '@/components/WorkoutMiniBar';
 import { SessionSummary } from '@/components/SessionSummary';
 
-type Screen = 'tabs' | 'program' | 'readiness' | 'workout' | 'summary';
+type Screen = 'tabs' | 'program' | 'maxes' | 'readiness' | 'workout' | 'summary';
 const MINIMIZE_THRESHOLD = 140;
 
 const Index = () => {
   const [activeTab, setActiveTab] = useState<'train' | 'progress' | 'history'>('train');
   const [screen, setScreen] = useState<Screen>('tabs');
+  // Pre-fill for the Training Maxes editor. Used when the lifter opens the
+  // editor in "Update" mode from ProgramOverview (vs blank first-time setup).
+  const [maxesInitial, setMaxesInitial] = useState<Partial<TrainingMaxes> | undefined>(undefined);
   // When the workout screen is up, sessionMinimized=false shows the full session
   // frame; true shows just the mini bar over the tab bar.
   const [sessionMinimized, setSessionMinimized] = useState(false);
   const { startSession, setReadiness, activeSession, cancelSession } = useTrainingStore();
+  const lastReadiness = useTrainingStore((s) => s.lastReadiness);
   const [pendingStart, setPendingStart] = useState<{
     name?: string;
     dayId?: string;
@@ -35,6 +41,18 @@ const Index = () => {
   const [stats, setStats] = useState<SessionStats>({ doneSets: 0, totalSets: 0 });
 
   const handleStartWorkout = (exercises?: ExerciseLog[], name?: string, dayId?: string) => {
+    // Same-day reuse: if the lifter already filled in Readiness today, don't
+    // re-prompt — start the Session and replay the saved check-in. The cancel
+    // path discards activeSession but `lastReadiness` is persisted on the
+    // store, so a cancel + restart on the same day flows straight to the
+    // workout screen.
+    if (lastReadiness && isSameCalendarDay(lastReadiness.timestamp, Date.now())) {
+      startSession(name, dayId, exercises);
+      setReadiness(lastReadiness.readiness);
+      setScreen('workout');
+      setSessionMinimized(false);
+      return;
+    }
     setPendingStart({ name, dayId, exercises });
     setScreen('readiness');
   };
@@ -120,12 +138,50 @@ const Index = () => {
       <SessionSummary
         session={{ ...activeSession, endTime: Date.now() }}
         onClose={handleSummaryClose}
+        onProgramComplete={(projection) => {
+          // Lifter chose "project new Training Maxes & restart" — both the
+          // session-save and program-restart have already been applied by
+          // SessionSummary. We just route to the editor with the projection
+          // pre-filled, so the lifter can sanity-check and save.
+          setMaxesInitial(projection);
+          setScreen('maxes');
+        }}
       />
     );
   }
 
   if (screen === 'program') {
-    return <ProgramOverview onBack={() => setScreen('tabs')} />;
+    return (
+      <ProgramOverview
+        onBack={() => setScreen('tabs')}
+        onRestart={() => {
+          // Restart clears Training Maxes (see store.restartProgram), so the
+          // editor opens blank and the lifter enters fresh post-block numbers.
+          setMaxesInitial(undefined);
+          setScreen('maxes');
+        }}
+        onUpdateMaxes={(initial) => {
+          setMaxesInitial(initial);
+          setScreen('maxes');
+        }}
+      />
+    );
+  }
+
+  if (screen === 'maxes') {
+    return (
+      <TrainingMaxesSetup
+        initial={maxesInitial}
+        onSubmit={() => {
+          setMaxesInitial(undefined);
+          setScreen('tabs');
+        }}
+        onCancel={() => {
+          setMaxesInitial(undefined);
+          setScreen('tabs');
+        }}
+      />
+    );
   }
 
   return (
@@ -135,6 +191,14 @@ const Index = () => {
           onStartEmpty={() => handleStartWorkout()}
           onStartToday={(exercises, name, dayId) => handleStartWorkout(exercises, name, dayId)}
           onViewProgram={() => setScreen('program')}
+          onSetupMaxes={() => {
+            setMaxesInitial(undefined);
+            setScreen('maxes');
+          }}
+          onUpdateMaxes={(initial) => {
+            setMaxesInitial(initial);
+            setScreen('maxes');
+          }}
         />
       )}
       {activeTab === 'progress' && <ProgressTab />}

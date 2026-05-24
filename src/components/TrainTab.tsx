@@ -5,15 +5,23 @@ import {
   ProgramExercise,
   Session,
   SetLog,
+  TrainingMaxes,
 } from '@/types/training';
+import { CANDITO_REP_MULTIPLIERS } from '@/lib/canditoMultipliers';
 import { lastTopSet } from '@/lib/e1rm';
 import { fatigueSignal, type FatigueSignal } from '@/lib/progressSignal';
 import { formatMuscles } from '@/lib/muscleLabels';
+import { calculatePrescribedWeight, programRequiresTrainingMaxes } from '@/lib/loadCalc';
 
 interface TrainTabProps {
   onStartEmpty: () => void;
   onStartToday: (exercises: ExerciseLog[], name: string, dayId: string) => void;
   onViewProgram: () => void;
+  /** Open the Training Maxes editor blank — first-time setup path. */
+  onSetupMaxes: () => void;
+  /** Open the Training Maxes editor pre-filled with current values — Update
+   *  path (e.g. the Week-5-complete nudge). */
+  onUpdateMaxes: (initial: Partial<TrainingMaxes>) => void;
 }
 
 const PHASE_META: Record<string, { label: string; tone: string }> = {
@@ -26,9 +34,17 @@ const PHASE_META: Record<string, { label: string; tone: string }> = {
   'Max Effort':  { label: 'Realization',    tone: 'Express strength on the competition lifts' },
 };
 
-export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTabProps) {
-  const { program, sessions } = useTrainingStore();
+export function TrainTab({
+  onStartEmpty,
+  onStartToday,
+  onViewProgram,
+  onSetupMaxes,
+  onUpdateMaxes,
+}: TrainTabProps) {
+  const { program, sessions, trainingMaxes, loadingIncrement } = useTrainingStore();
   const [fatigueDismissed, setFatigueDismissed] = useState(false);
+  const [weekFiveBannerDismissed, setWeekFiveBannerDismissed] = useState(false);
+  const maxesMissing = trainingMaxes === null && programRequiresTrainingMaxes(program);
 
   const block = program.blocks[program.currentBlockIndex];
   const week = block?.weeks[program.currentWeekIndex];
@@ -58,6 +74,14 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
   const todaysMain = day.exercises.find((e) => e.exercise.isMainLift);
   const fatigue = todaysMain ? fatigueSignal(sessions, todaysMain.exercise) : null;
 
+  // The Candito Hybrid program's projection ritual lives at the Week 5 → Week 6
+  // boundary: MR test sets in Week 5, projected new Training Maxes before the
+  // Realization peak in Week 6. We use `weekNumber === 6 && dayIndex === 0` as
+  // the boundary marker; once the lifter logs Day 1 of Week 6 the cursor moves
+  // forward and the banner naturally disappears.
+  const weekFiveJustFinished =
+    week.weekNumber === 6 && program.currentDayIndex === 0 && !maxesMissing;
+
   const dateStr = new Date().toLocaleDateString('en-GB', {
     weekday: 'long',
     day: 'numeric',
@@ -68,6 +92,10 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
   const accessories = day.exercises.filter((pe) => !pe.exercise.isMainLift);
 
   const handleStartToday = () => {
+    if (maxesMissing) {
+      onSetupMaxes();
+      return;
+    }
     const exercises: ExerciseLog[] = day.exercises.map((pe) => {
       const sets: SetLog[] = Array.from({ length: pe.prescription.sets }, (_, i) => ({
         id: `preset-${Date.now()}-${i}`,
@@ -123,6 +151,25 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
         </div>
       </div>
 
+      {maxesMissing && (
+        <button type="button" className="tv-maxes-banner" onClick={onSetupMaxes}>
+          <div className="tv-maxes-banner-body">
+            <div className="tv-maxes-banner-title">Enter your Training Maxes to start</div>
+            <div className="tv-maxes-banner-sub">
+              This program prescribes percentage-based loads. Set Squat, Bench, and Deadlift Training Maxes to compute weights.
+            </div>
+          </div>
+          <span className="tv-maxes-banner-arrow">→</span>
+        </button>
+      )}
+
+      {weekFiveJustFinished && !weekFiveBannerDismissed && (
+        <WeekFiveBanner
+          onProject={() => onUpdateMaxes(trainingMaxes ?? {})}
+          onDismiss={() => setWeekFiveBannerDismissed(true)}
+        />
+      )}
+
       {fatigue && !fatigueDismissed && (
         <FatigueBanner signal={fatigue} onDismiss={() => setFatigueDismissed(true)} />
       )}
@@ -151,7 +198,15 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
               <div className="tv-section-line" />
             </div>
             {mainLifts.map((pe, i) => (
-              <DocketRow key={pe.exercise.id} pe={pe} sessions={sessions} index={i} isMain />
+              <DocketRow
+                key={`${pe.exercise.id}-${i}`}
+                pe={pe}
+                sessions={sessions}
+                index={i}
+                isMain
+                trainingMaxes={trainingMaxes}
+                loadingIncrement={loadingIncrement}
+              />
             ))}
           </>
         )}
@@ -164,11 +219,13 @@ export function TrainTab({ onStartEmpty, onStartToday, onViewProgram }: TrainTab
             </div>
             {accessories.map((pe, i) => (
               <DocketRow
-                key={pe.exercise.id}
+                key={`${pe.exercise.id}-${mainLifts.length + i}`}
                 pe={pe}
                 sessions={sessions}
                 index={mainLifts.length + i}
                 isMain={false}
+                trainingMaxes={trainingMaxes}
+                loadingIncrement={loadingIncrement}
               />
             ))}
           </>
@@ -193,13 +250,21 @@ interface DocketRowProps {
   sessions: Session[];
   index: number;
   isMain: boolean;
+  trainingMaxes: TrainingMaxes | null;
+  loadingIncrement: number;
 }
 
 // Default docket variant: stacked plate bars (one per prescribed set), with the
 // last top-set weight pinned to the right of main lifts.
-function DocketRow({ pe, sessions, index, isMain }: DocketRowProps) {
+function DocketRow({ pe, sessions, index, isMain, trainingMaxes, loadingIncrement }: DocketRowProps) {
   const setBars = Array.from({ length: pe.prescription.sets });
   const last = isMain ? lastTopSet(sessions, pe.exercise.id) : null;
+  const prescribedWeight = calculatePrescribedWeight(
+    pe.prescription,
+    pe.exercise,
+    trainingMaxes,
+    loadingIncrement,
+  );
   return (
     <div className={`dr ${isMain ? 'is-main' : ''}`}>
       <div className="dr-num">{String(index + 1).padStart(2, '0')}</div>
@@ -208,6 +273,9 @@ function DocketRow({ pe, sessions, index, isMain }: DocketRowProps) {
           <span className="dr-name">{pe.exercise.name}</span>
           <span className="dr-mg">{formatMuscles(pe.exercise)}</span>
         </div>
+        {pe.prescription.notes && (
+          <div className="dr-note">{pe.prescription.notes}</div>
+        )}
         <div className="dr-plates-row">
           <div className="dr-plates-bars" aria-hidden>
             {setBars.map((_, i) => (
@@ -232,6 +300,15 @@ function DocketRow({ pe, sessions, index, isMain }: DocketRowProps) {
             {pe.prescription.rpeTarget != null && (
               <span className="dr-plates-rpe">@{pe.prescription.rpeTarget}</span>
             )}
+            {pe.prescription.loadPercentage != null && (
+              <span className="dr-plates-rpe">@{pe.prescription.loadPercentage}%</span>
+            )}
+            {prescribedWeight != null && (
+              <span className="dr-rx-load">
+                {prescribedWeight}
+                <span className="u">kg</span>
+              </span>
+            )}
           </span>
           {isMain && last && (
             <span className="dr-plates-top">
@@ -244,6 +321,52 @@ function DocketRow({ pe, sessions, index, isMain }: DocketRowProps) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+interface WeekFiveBannerProps {
+  onProject: () => void;
+  onDismiss: () => void;
+}
+
+function WeekFiveBanner({ onProject, onDismiss }: WeekFiveBannerProps) {
+  return (
+    <div className="wk5-banner">
+      <div className="wk5-banner-head">
+        <span className="wk5-banner-eyebrow">Block Realization · Week 6</span>
+        <button
+          type="button"
+          className="wk5-banner-x"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+        >
+          <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+            <path d="M2 2l7 7M9 2l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
+      <div className="wk5-banner-title">Week 5 complete</div>
+      <p className="wk5-banner-text">
+        Project new Training Maxes from your AMRAP results before starting Week 6. Multiply
+        your top-set weight by the factor for the reps you hit.
+      </p>
+      <div className="wk5-chart">
+        <div className="wk5-chart-head">
+          <span>REPS</span>
+          <span>× TOP SET</span>
+        </div>
+        {CANDITO_REP_MULTIPLIERS.map(({ reps, mult }) => (
+          <div key={reps} className="wk5-chart-row">
+            <span className="wk5-chart-reps">{reps}</span>
+            <span className="wk5-chart-mult">× {mult.toFixed(2)}</span>
+          </div>
+        ))}
+      </div>
+      <button type="button" className="wk5-banner-cta" onClick={onProject}>
+        Update Training Maxes
+        <span className="wk5-banner-cta-arrow">→</span>
+      </button>
     </div>
   );
 }

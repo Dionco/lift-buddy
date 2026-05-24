@@ -1,11 +1,24 @@
 import { useState } from 'react';
 import { useTrainingStore } from '@/store/useTrainingStore';
-import { ProgramBlock, ProgramDay, ProgramExercise, ProgramWeek } from '@/types/training';
+import {
+  ProgramBlock,
+  ProgramDay,
+  ProgramExercise,
+  ProgramWeek,
+  TrainingMaxes,
+} from '@/types/training';
 import { isCursor, isPast } from '@/lib/programCursor';
 import { formatMuscles } from '@/lib/muscleLabels';
+import { calculatePrescribedWeight } from '@/lib/loadCalc';
 
 interface ProgramOverviewProps {
   onBack: () => void;
+  /** Restart from Week 1 Day 1 + clear Training Maxes so the lifter enters
+   *  fresh post-block numbers. */
+  onRestart: () => void;
+  /** Open the Training Maxes editor pre-filled with current values — touches
+   *  maxes only, cursor untouched. */
+  onUpdateMaxes: (initial: Partial<TrainingMaxes>) => void;
 }
 
 const PHASE_META: Record<string, { label: string; tone: string }> = {
@@ -20,10 +33,21 @@ const PHASE_META: Record<string, { label: string; tone: string }> = {
 
 interface DayCoord { bi: number; wi: number; di: number }
 
-export function ProgramOverview({ onBack }: ProgramOverviewProps) {
-  const { program, setProgramCursor } = useTrainingStore();
+export function ProgramOverview({ onBack, onRestart, onUpdateMaxes }: ProgramOverviewProps) {
+  const { program, setProgramCursor, restartProgram, trainingMaxes } = useTrainingStore();
   const [focusedBlockIdx, setFocusedBlockIdx] = useState(program.currentBlockIndex);
   const [focusedDay, setFocusedDay] = useState<DayCoord | null>(null);
+
+  const handleRestart = () => {
+    if (
+      window.confirm(
+        'Restart program from Week 1, Day 1? Your past sessions stay in history, but the cursor resets and you will be asked for fresh Training Maxes.',
+      )
+    ) {
+      restartProgram();
+      onRestart();
+    }
+  };
 
   const block = program.blocks[focusedBlockIdx];
   const phase = PHASE_META[block.focus] ?? { label: block.focus, tone: '' };
@@ -125,6 +149,44 @@ export function ProgramOverview({ onBack }: ProgramOverviewProps) {
         ))}
       </div>
 
+      <div className="pv-actions">
+        <button
+          type="button"
+          className="pv-action"
+          onClick={() => onUpdateMaxes(trainingMaxes ?? {})}
+          disabled={trainingMaxes === null}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
+            <path
+              d="M2.5 11.5L5 14l8.5-8.5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M10 2.5l3.5 3.5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+          Update Training Maxes
+        </button>
+        <button type="button" className="pv-action pv-action--restart" onClick={handleRestart}>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
+            <path
+              d="M3 8a5 5 0 1 1 1.5 3.5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+            <path d="M3 4v3.5H6.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Restart program
+        </button>
+      </div>
+
       {focusedDay && (
         <DayFocusSheet
           coord={focusedDay}
@@ -213,7 +275,7 @@ interface DayFocusSheetProps {
 }
 
 function DayFocusSheet({ coord, onClose, onJump }: DayFocusSheetProps) {
-  const { program } = useTrainingStore();
+  const { program, trainingMaxes, loadingIncrement } = useTrainingStore();
   const day: ProgramDay = program.blocks[coord.bi].weeks[coord.wi].days[coord.di];
   const cursorHere = isCursor(program, coord.bi, coord.wi, coord.di);
   const cleanName = day.name.replace(/^Day\s*\d+\s*[—-]\s*/, '');
@@ -235,28 +297,50 @@ function DayFocusSheet({ coord, onClose, onJump }: DayFocusSheetProps) {
           </button>
         </div>
         <div className="dfs-list">
-          {day.exercises.map((pe: ProgramExercise, idx: number) => (
-            <div key={pe.exercise.id} className="dfs-row">
-              <div className="dfs-row-num">{String(idx + 1).padStart(2, '0')}</div>
-              <div className="dfs-row-body">
-                <div className="dfs-row-name">
-                  {pe.exercise.name}
-                  {pe.exercise.isMainLift && (
-                    <span className="dfs-main-mark" title="Main Lift">●</span>
+          {day.exercises.map((pe: ProgramExercise, idx: number) => {
+            const weight = calculatePrescribedWeight(
+              pe.prescription,
+              pe.exercise,
+              trainingMaxes,
+              loadingIncrement,
+            );
+            return (
+              <div key={`${pe.exercise.id}-${idx}`} className="dfs-row">
+                <div className="dfs-row-num">{String(idx + 1).padStart(2, '0')}</div>
+                <div className="dfs-row-body">
+                  <div className="dfs-row-name">
+                    {pe.exercise.name}
+                    {pe.exercise.isMainLift && (
+                      <span className="dfs-main-mark" title="Main Lift">●</span>
+                    )}
+                  </div>
+                  <div className="dfs-row-mg">{formatMuscles(pe.exercise)}</div>
+                  {pe.prescription.notes && (
+                    <div className="dfs-row-mg" style={{ marginTop: 4, fontStyle: 'italic' }}>
+                      {pe.prescription.notes}
+                    </div>
                   )}
                 </div>
-                <div className="dfs-row-mg">{formatMuscles(pe.exercise)}</div>
+                <div className="dfs-row-rx">
+                  <span className="dfs-rx-sets">{pe.prescription.sets}</span>
+                  <span className="dfs-rx-x">×</span>
+                  <span className="dfs-rx-reps">{pe.prescription.reps}</span>
+                  {pe.prescription.rpeTarget != null && (
+                    <span className="dfs-rx-rpe">@{pe.prescription.rpeTarget}</span>
+                  )}
+                  {pe.prescription.loadPercentage != null && (
+                    <span className="dfs-rx-rpe">@{pe.prescription.loadPercentage}%</span>
+                  )}
+                  {weight != null && (
+                    <span className="dfs-rx-load">
+                      {weight}
+                      <span className="u">kg</span>
+                    </span>
+                  )}
+                </div>
               </div>
-              <div className="dfs-row-rx">
-                <span className="dfs-rx-sets">{pe.prescription.sets}</span>
-                <span className="dfs-rx-x">×</span>
-                <span className="dfs-rx-reps">{pe.prescription.reps}</span>
-                {pe.prescription.rpeTarget != null && (
-                  <span className="dfs-rx-rpe">@{pe.prescription.rpeTarget}</span>
-                )}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         <div className="dfs-actions">
           <button type="button" className="btn-primary" onClick={() => onJump(coord)}>

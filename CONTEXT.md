@@ -27,7 +27,7 @@ A single planned training **Workout** within a **Week** — a list of **Program 
 _Avoid_: training day (when it would be ambiguous with date)
 
 **Prescription**:
-What the program asks the lifter to do for one exercise: number of sets, reps, and an optional **RPE** target.
+What the program asks the lifter to do for one exercise: number of sets, reps, and an optional **RPE** target. May also carry a `loadPercentage` referencing the lifter's **Training Max** for the exercise's main-lift basis — when present, the app derives a prescribed weight on the fly (the weight itself is never stored). May also carry a `notes` field for protocol rules that don't fit the sets/reps/RPE shape (e.g. MR back-off, "leave 2-3 in tank", "ascending triple 1/3").
 _Avoid_: target, plan
 
 ### Doing the work
@@ -99,6 +99,12 @@ _Avoid_: effort rating
 **e1RM** (Estimated 1-Rep Max):
 A predicted one-rep-max derived from a non-maximal set's weight, reps, and RPE. Calculated as `weight / (1.0278 - 0.0278 × (reps + (10 - rpe)))`. Computed for **every** exercise. Most accurate at 1–5 reps; error grows above 10 reps. Cross-rep-range comparisons (e.g. a 3-rep e1RM vs a 10-rep e1RM) are not reliable — only compare e1RM within similar rep ranges.
 _Avoid_: 1RM (which means an actual tested max)
+
+**Training Max**:
+The lifter's self-reported strength baseline that **percentage-based programs use to compute prescribed weights** for the three Main Lifts (Squat, Bench, Deadlift). Distinct from **1RM** (actually tested) and **e1RM** (estimated from a non-maximal set): the lifter sets the Training Max themselves, typically to a recent tested 1RM or a deliberately conservative number (e.g. 95% of e1RM) to keep autoregulation honest. Programs reference Training Max via `Prescription.loadPercentage`; weights are derived as `round(percentage × trainingMax / loadingIncrement)`.
+
+**Ownership**: An attribute of the **lifter**, not the **Program** — a lifter's squat is their squat regardless of which program they're running. Updating Training Max mid-program changes all upcoming weights immediately (cursor untouched). Restarting the program is a deliberate checkpoint: it both resets the cursor and clears the Training Max, because after a multi-week block the lifter's strength has likely changed and stale numbers should not be carried forward silently. Switching programs (hypothetical — currently single-program) preserves Training Max.
+_Avoid_: 1RM (means tested max), working max (overloaded with **Working Sets**), user max (no domain content)
 
 ### Progress
 

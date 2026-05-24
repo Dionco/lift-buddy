@@ -15,23 +15,30 @@ export const EXERCISES: Record<string, Exercise> = {
   closeGripBench: { id: 'closeGripBench', name: 'Close-Grip Bench', primaryMuscles: ['Triceps', 'Chest', 'Front Delts'], isMainLift: false, relatedTo: 'Bench Press' },
   pausedBench: { id: 'pausedBench', name: 'Paused Bench', primaryMuscles: ['Chest', 'Front Delts', 'Triceps'], isMainLift: false, relatedTo: 'Bench Press' },
   inclineBench: { id: 'inclineBench', name: 'Incline Bench', primaryMuscles: ['Chest', 'Front Delts'], secondaryMuscles: ['Triceps'], isMainLift: false, relatedTo: 'Bench Press' },
+  wideGripBench: { id: 'wideGripBench', name: 'Wide-Grip Bench', primaryMuscles: ['Chest', 'Front Delts'], secondaryMuscles: ['Triceps'], isMainLift: false, relatedTo: 'Bench Press' },
+  dbBench: { id: 'dbBench', name: 'DB Bench Press', primaryMuscles: ['Chest', 'Front Delts', 'Triceps'], isMainLift: false, relatedTo: 'Bench Press' },
+  dbInclineBench: { id: 'dbInclineBench', name: 'DB Incline Bench', primaryMuscles: ['Chest', 'Front Delts'], secondaryMuscles: ['Triceps'], isMainLift: false, relatedTo: 'Bench Press' },
 
   // Deadlift variations
   sumoDeadlift: { id: 'sumoDeadlift', name: 'Sumo Deadlift', primaryMuscles: ['Glutes', 'Quads', 'Adductors', 'Spinal Erectors'], secondaryMuscles: ['Hamstrings', 'Traps'], isMainLift: false, relatedTo: 'Deadlift' },
   deficitDeadlift: { id: 'deficitDeadlift', name: 'Deficit Deadlift', primaryMuscles: ['Glutes', 'Hamstrings', 'Quads', 'Spinal Erectors'], secondaryMuscles: ['Lats', 'Traps'], isMainLift: false, relatedTo: 'Deadlift' },
   rdl: { id: 'rdl', name: 'Romanian Deadlift', primaryMuscles: ['Hamstrings', 'Glutes'], secondaryMuscles: ['Spinal Erectors', 'Forearms'], isMainLift: false, relatedTo: 'Deadlift' },
+  pausedDeadlift: { id: 'pausedDeadlift', name: 'Paused Deadlift', primaryMuscles: ['Glutes', 'Hamstrings', 'Spinal Erectors'], secondaryMuscles: ['Lats', 'Upper Back', 'Traps', 'Forearms'], isMainLift: false, relatedTo: 'Deadlift' },
 
   // Other accessories
   legPress: { id: 'legPress', name: 'Leg Press', primaryMuscles: ['Quads', 'Glutes'], secondaryMuscles: ['Hamstrings', 'Adductors'], isMainLift: false },
   overheadPress: { id: 'ohp', name: 'Overhead Press', primaryMuscles: ['Front Delts', 'Triceps'], secondaryMuscles: ['Side Delts', 'Upper Back', 'Core'], isMainLift: false },
+  dbSeatedOhp: { id: 'dbSeatedOhp', name: 'DB Seated Overhead Press', primaryMuscles: ['Front Delts', 'Triceps'], secondaryMuscles: ['Side Delts'], isMainLift: false },
   barbellRow: { id: 'row', name: 'Barbell Row', primaryMuscles: ['Lats', 'Upper Back', 'Rear Delts'], secondaryMuscles: ['Biceps', 'Spinal Erectors'], isMainLift: false },
   pullUp: { id: 'pullup', name: 'Pull-ups', primaryMuscles: ['Lats', 'Upper Back'], secondaryMuscles: ['Biceps', 'Rear Delts', 'Forearms'], isMainLift: false },
   dips: { id: 'dips', name: 'Dips', primaryMuscles: ['Triceps', 'Chest', 'Front Delts'], isMainLift: false },
   legCurl: { id: 'legcurl', name: 'Leg Curl', primaryMuscles: ['Hamstrings'], isMainLift: false },
   calfRaise: { id: 'calfraise', name: 'Calf Raise', primaryMuscles: ['Calves'], isMainLift: false },
-  lateralRaise: { id: 'latraise', name: 'Lateral Raise', primaryMuscles: ['Side Delts'], isMainLift: false },
+  lateralRaise: { id: 'latraise', name: 'DB Lateral Raise', primaryMuscles: ['Side Delts'], isMainLift: false },
   bicepCurl: { id: 'curl', name: 'Bicep Curl', primaryMuscles: ['Biceps'], secondaryMuscles: ['Forearms'], isMainLift: false },
   plank: { id: 'plank', name: 'Plank', primaryMuscles: ['Core'], isMainLift: false },
+  skullCrushers: { id: 'skullCrushers', name: 'Skull Crushers', primaryMuscles: ['Triceps'], isMainLift: false },
+  ohcTricepsExt: { id: 'ohcTricepsExt', name: 'Overhead Cable Triceps Extension', primaryMuscles: ['Triceps'], isMainLift: false },
 };
 
 const blocks: ProgramBlock[] = [

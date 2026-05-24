@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import {
   Session,
+  TrainingMaxes,
   diffSessionAgainstDay,
 } from '@/types/training';
 import { topSetE1rm } from '@/lib/e1rm';
@@ -11,6 +12,7 @@ import {
   type BlockBoundaryChoice,
 } from '@/lib/programCursor';
 import { useTrainingStore } from '@/store/useTrainingStore';
+import { extractHeaviestSingles } from '@/lib/extractHeaviestSingles';
 import { Textarea } from '@/components/ui/textarea';
 import { Clock, BarChart3, Activity, Trophy, AlertCircle, Plus } from 'lucide-react';
 
@@ -22,15 +24,25 @@ interface SessionSummaryProps {
    * navigation; this component owns persistence (finishSession + advanceProgramCursor).
    */
   onClose: () => void;
+  /**
+   * Called when the just-finished session was the program's final day AND the
+   * lifter chose to project new Training Maxes. By the time this fires
+   * `finishSession` and `restartProgram` have already been applied — the
+   * parent only needs to navigate the lifter to the Training Maxes editor
+   * pre-filled with the projection.
+   */
+  onProgramComplete?: (projection: Partial<TrainingMaxes>) => void;
 }
 
 type EndOfBlockChoice = BlockBoundaryChoice | null;
 
-export function SessionSummary({ session, onClose }: SessionSummaryProps) {
+export function SessionSummary({ session, onClose, onProgramComplete }: SessionSummaryProps) {
   const program = useTrainingStore((s) => s.program);
   const finishSession = useTrainingStore((s) => s.finishSession);
   const advanceProgramCursor = useTrainingStore((s) => s.advanceProgramCursor);
   const setProgramCursor = useTrainingStore((s) => s.setProgramCursor);
+  const restartProgram = useTrainingStore((s) => s.restartProgram);
+  const loadingIncrement = useTrainingStore((s) => s.loadingIncrement);
 
   const [note, setNote] = useState(session.note || '');
   const [endOfBlockOpen, setEndOfBlockOpen] = useState(false);
@@ -38,6 +50,24 @@ export function SessionSummary({ session, onClose }: SessionSummaryProps) {
   const programDayLocation = useMemo(
     () => (session.programDayId ? findDayById(program, session.programDayId) : null),
     [program, session.programDayId]
+  );
+
+  // Detect "this session was the program's final day". When true we replace
+  // the cursor-advance affordance with a Block Complete panel — the lifter's
+  // next move is to project new Training Maxes and restart, not advance to a
+  // day that doesn't exist.
+  const isFinalDay = useMemo(() => {
+    if (!programDayLocation) return false;
+    const { blockIndex, weekIndex, dayIndex } = programDayLocation;
+    if (blockIndex !== program.blocks.length - 1) return false;
+    const block = program.blocks[blockIndex];
+    if (weekIndex !== block.weeks.length - 1) return false;
+    return dayIndex === block.weeks[weekIndex].days.length - 1;
+  }, [programDayLocation, program]);
+
+  const projectedMaxes = useMemo(
+    () => extractHeaviestSingles(session, loadingIncrement),
+    [session, loadingIncrement],
   );
 
   const stats = useMemo(() => {
@@ -70,6 +100,16 @@ export function SessionSummary({ session, onClose }: SessionSummaryProps) {
     const result = advanceProgramCursor();
     if (result.blockBoundaryCrossed && !result.programComplete) {
       setEndOfBlockOpen(true);
+      return;
+    }
+    onClose();
+  };
+
+  const closeAndProjectMaxes = () => {
+    finishSession(note || undefined);
+    restartProgram();
+    if (onProgramComplete) {
+      onProgramComplete(projectedMaxes);
       return;
     }
     onClose();
@@ -212,23 +252,32 @@ export function SessionSummary({ session, onClose }: SessionSummaryProps) {
         />
       </div>
 
-      <div className="flex flex-col gap-2">
-        <button
-          onClick={closeAndAdvance}
-          className="min-h-[52px] w-full rounded-xl bg-primary font-semibold text-primary-foreground active:scale-[0.98] transition-transform"
-          disabled={!session.programDayId}
-        >
-          {session.programDayId ? 'Mark complete & advance program' : 'Save & close'}
-        </button>
-        {session.programDayId && (
+      {isFinalDay ? (
+        <BlockCompletePanel
+          program={program}
+          projection={projectedMaxes}
+          onProjectMaxes={closeAndProjectMaxes}
+          onRestLater={closeWithoutAdvance}
+        />
+      ) : (
+        <div className="flex flex-col gap-2">
           <button
-            onClick={closeWithoutAdvance}
-            className="min-h-[44px] w-full rounded-xl border border-border bg-background font-medium text-muted-foreground active:scale-[0.98] transition-transform text-sm"
+            onClick={closeAndAdvance}
+            className="min-h-[52px] w-full rounded-xl bg-primary font-semibold text-primary-foreground active:scale-[0.98] transition-transform"
+            disabled={!session.programDayId}
           >
-            Save without advancing cursor
+            {session.programDayId ? 'Mark complete & advance program' : 'Save & close'}
           </button>
-        )}
-      </div>
+          {session.programDayId && (
+            <button
+              onClick={closeWithoutAdvance}
+              className="min-h-[44px] w-full rounded-xl border border-border bg-background font-medium text-muted-foreground active:scale-[0.98] transition-transform text-sm"
+            >
+              Save without advancing cursor
+            </button>
+          )}
+        </div>
+      )}
 
       {endOfBlockOpen && programDayLocation && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center">
@@ -267,6 +316,83 @@ export function SessionSummary({ session, onClose }: SessionSummaryProps) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+interface BlockCompletePanelProps {
+  program: { name: string };
+  projection: Partial<TrainingMaxes>;
+  onProjectMaxes: () => void;
+  onRestLater: () => void;
+}
+
+function BlockCompletePanel({
+  program,
+  projection,
+  onProjectMaxes,
+  onRestLater,
+}: BlockCompletePanelProps) {
+  const rows: Array<{ label: string; value: number | undefined }> = [
+    { label: 'Squat', value: projection.squat },
+    { label: 'Bench Press', value: projection.bench },
+    { label: 'Deadlift', value: projection.deadlift },
+  ];
+  const anyProjected = rows.some((r) => r.value != null);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="rounded-2xl bg-foreground text-background p-5">
+        <div className="text-[10px] font-semibold tracking-[0.18em] uppercase opacity-60">
+          Block Complete
+        </div>
+        <h3 className="text-xl font-semibold mt-1.5">{program.name}</h3>
+        <p className="text-sm leading-snug mt-2 opacity-80">
+          You've finished the program's final day. Project new Training Maxes from today's heavy
+          singles, then restart with fresh numbers.
+        </p>
+
+        {anyProjected ? (
+          <div className="mt-4 rounded-xl bg-background/8 border border-background/12 p-3">
+            <div className="text-[10px] font-semibold tracking-[0.16em] uppercase opacity-60 pb-2 border-b border-background/12">
+              Heaviest singles today
+            </div>
+            <div className="flex flex-col">
+              {rows.map(({ label, value }) => (
+                <div
+                  key={label}
+                  className="flex items-baseline justify-between py-2 first:pt-3 [&:not(:first-child)]:border-t border-dashed border-background/10"
+                >
+                  <span className="text-sm font-medium">{label}</span>
+                  <span className="font-mono text-sm">
+                    {value != null ? `${value} kg` : <span className="opacity-50">— no single logged</span>}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] leading-snug mt-3 opacity-65">
+              Suggested as Training Max seeds (rounded down). Edit before saving.
+            </p>
+          </div>
+        ) : (
+          <p className="text-[12px] leading-snug mt-3 opacity-65">
+            No heavy singles logged today — enter your projected Training Maxes on the next screen.
+          </p>
+        )}
+      </div>
+
+      <button
+        onClick={onProjectMaxes}
+        className="min-h-[52px] w-full rounded-xl bg-primary font-semibold text-primary-foreground active:scale-[0.98] transition-transform"
+      >
+        Set new Training Maxes &amp; restart →
+      </button>
+      <button
+        onClick={onRestLater}
+        className="min-h-[44px] w-full rounded-xl border border-border bg-background font-medium text-muted-foreground active:scale-[0.98] transition-transform text-sm"
+      >
+        Just rest — restart later
+      </button>
     </div>
   );
 }

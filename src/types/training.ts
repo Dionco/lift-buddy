@@ -98,8 +98,47 @@ export interface Session {
 
 export interface SetPrescription {
   sets: number;
-  reps: string; // e.g. "5", "8-12"
+  reps: string; // e.g. "5", "8-12", "MR" (max reps to RPE 10)
   rpeTarget?: number;
+  /** Percentage of the load basis Training Max (0-100). When set, the app
+   *  derives a prescribed weight from the lifter's TrainingMaxes. */
+  loadPercentage?: number;
+  /** Which main-lift Training Max the percentage is computed against. Defaults
+   *  to the exercise itself if it's a main lift, or its `relatedTo` if it's a
+   *  variant. */
+  loadBasis?: MainLift;
+  /** Free-form coach-note tied to this prescription (e.g. MR back-off rule).
+   *  Surfaced in the Day Focus sheet so the lifter sees the protocol up-front. */
+  notes?: string;
+}
+
+/** Three-lift Training Max input that drives all loadPercentage-based
+ *  prescriptions. Owned by the lifter, not the program (see ADR-0013). */
+export interface TrainingMaxes {
+  squat: number;
+  bench: number;
+  deadlift: number;
+}
+
+/** Map an Exercise to the MainLift its 1RM should be computed against.
+ *  Returns null for accessories (e.g. lateral raise) that don't have a basis. */
+export function exerciseToMainLift(exercise: Exercise): MainLift | null {
+  if (exercise.isMainLift) {
+    const name = exercise.name;
+    if (name === 'Squat' || name === 'Bench Press' || name === 'Deadlift') return name;
+  }
+  if (exercise.relatedTo) return exercise.relatedTo;
+  return null;
+}
+
+/** Resolve the 1RM that backs a prescription's percentage. Honours explicit
+ *  loadBasis, falls back to the exercise's main-lift mapping. */
+export function resolveLoadBasis(
+  prescription: SetPrescription,
+  exercise: Exercise,
+): MainLift | null {
+  if (prescription.loadBasis) return prescription.loadBasis;
+  return exerciseToMainLift(exercise);
 }
 
 export interface ProgramExercise {
@@ -162,31 +201,48 @@ export interface SessionDayDiff {
 /**
  * Compare a Session against the Day it was performed for. Pure — no store coupling.
  * "Skipped" means absent from the Session entirely. We never fabricate placeholder sets.
+ *
+ * Prescriptions and logs are consumed **in order** rather than keyed by
+ * `exercise.id`, so a Day that prescribes the same exercise multiple times
+ * (ascending triples, MR + back-off, test-day opener/2nd/3rd) diffs correctly
+ * — see ADR-0012. Each prescription claims the next unconsumed matching log;
+ * unmatched prescriptions become `skipped`, unmatched logs become `bonus`.
  */
 export function diffSessionAgainstDay(session: Session, day: ProgramDay): SessionDayDiff {
-  const sessionByExerciseId = new Map(
-    session.exercises.map(log => [log.exercise.id, log])
-  );
-  const dayByExerciseId = new Map(
-    day.exercises.map(pe => [pe.exercise.id, pe])
-  );
+  // Walk day.exercises in order. For each prescription, claim the earliest
+  // session log with a matching exercise id that hasn't already been claimed.
+  // This preserves slot identity for duplicates — log[0] pairs with
+  // prescription[0], log[1] with prescription[1], regardless of intervening
+  // entries.
+  const claimedLogIdx = new Set<number>();
+  const peToLogIdx: Array<number | null> = day.exercises.map((pe) => {
+    for (let i = 0; i < session.exercises.length; i++) {
+      if (claimedLogIdx.has(i)) continue;
+      if (session.exercises[i].exercise.id === pe.exercise.id) {
+        claimedLogIdx.add(i);
+        return i;
+      }
+    }
+    return null;
+  });
 
   const skipped: ProgramExercise[] = [];
-  for (const pe of day.exercises) {
-    if (!sessionByExerciseId.has(pe.exercise.id)) skipped.push(pe);
-  }
+  day.exercises.forEach((pe, peIdx) => {
+    if (peToLogIdx[peIdx] === null) skipped.push(pe);
+  });
 
   const bonus: ExerciseLog[] = [];
-  for (const log of session.exercises) {
-    if (!dayByExerciseId.has(log.exercise.id)) bonus.push(log);
-  }
+  session.exercises.forEach((log, logIdx) => {
+    if (!claimedLogIdx.has(logIdx)) bonus.push(log);
+  });
 
   const missedReps: SessionDayDiff['missedReps'] = [];
-  for (const log of session.exercises) {
-    const pe = dayByExerciseId.get(log.exercise.id);
-    if (!pe) continue;
+  day.exercises.forEach((pe, peIdx) => {
+    const logIdx = peToLogIdx[peIdx];
+    if (logIdx === null) return;
+    const log = session.exercises[logIdx];
     const lowerBound = parsePrescribedRepsLowerBound(pe.prescription.reps);
-    if (lowerBound === null) continue;
+    if (lowerBound === null) return;
     for (const setLog of log.sets) {
       if (!setLog.completed) continue;
       if (setLog.reps > 0 && setLog.reps < lowerBound) {
@@ -197,7 +253,7 @@ export function diffSessionAgainstDay(session: Session, day: ProgramDay): Sessio
         });
       }
     }
-  }
+  });
 
   return { skipped, bonus, missedReps };
 }

@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Session, Program, ExerciseLog, SetLog, ReadinessCheckIn, ProgramBlock, Exercise, MuscleGroup } from '@/types/training';
+import { Session, Program, ExerciseLog, SetLog, ReadinessCheckIn, ProgramBlock, Exercise, MuscleGroup, TrainingMaxes } from '@/types/training';
 import { computeNextCursor, NextCursorResult } from '@/lib/programCursor';
-import { sampleProgram, EXERCISES } from '@/data/sampleProgram';
+import { EXERCISES } from '@/data/sampleProgram';
+import { canditoHybridProgram } from '@/data/canditoHybridProgram';
 import { sampleSessions } from '@/data/sampleSessions';
 
 export type AdvanceCursorResult = Pick<NextCursorResult, 'blockBoundaryCrossed' | 'programComplete'>;
@@ -12,6 +13,20 @@ interface TrainingState {
   program: Program;
   activeSession: Session | null;
   restTimerDuration: number; // seconds
+  /** Three-lift Training Maxes that back loadPercentage-based prescriptions.
+   *  Null until the lifter has entered them — UI must prompt before any program
+   *  day with loadPercentage can compute weights. Cleared on restartProgram so
+   *  the next block can be loaded with fresh Training Maxes (e.g. post-test-day
+   *  projected maxes). See ADR-0013 for the lifter-owned model. */
+  trainingMaxes: TrainingMaxes | null;
+  /** Plate-loading increment used to round prescribed weights (typically 2.5kg,
+   *  or 1.25kg with fractional plates). */
+  loadingIncrement: number;
+  /** Most recent Readiness check-in the lifter submitted, with the wall-clock
+   *  time it was logged. Used to suppress the Readiness prompt for repeat
+   *  session-starts on the same calendar day — including the cancel-and-restart
+   *  case where the prior Session never reached `sessions[]`. */
+  lastReadiness: { readiness: ReadinessCheckIn; timestamp: number } | null;
 
   startSession: (workoutName?: string, programDayId?: string, exercises?: ExerciseLog[]) => void;
   setReadiness: (readiness: ReadinessCheckIn) => void;
@@ -24,6 +39,12 @@ interface TrainingState {
   finishSession: (note?: string) => void;
   cancelSession: () => void;
   setRestTimerDuration: (seconds: number) => void;
+  setTrainingMaxes: (maxes: TrainingMaxes) => void;
+  setLoadingIncrement: (increment: number) => void;
+  /** Reset the program cursor to (0,0,0) and clear trainingMaxes so the next
+   *  start re-prompts. Used at the end of a 6-week block when restarting with
+   *  new projected/tested Training Maxes. */
+  restartProgram: () => void;
   /**
    * Advance the program cursor by one Day. Walks Day → Week → Block.
    * Returns whether a Block boundary was crossed (so the UI can prompt) and
@@ -182,6 +203,36 @@ function migrate(persistedState: unknown, version: number): TrainingState {
       state.sessions = [...state.sessions].sort((a, b) => b.startTime - a.startTime);
     }
   }
+  if (version < 5) {
+    // v5: replace the legacy 2-block sample program with the 6-week Candito
+    // Hybrid + add the trainingMaxes / loadingIncrement fields. The old program
+    // has no loadPercentage prescriptions so no Training Maxes prompt is needed
+    // for sessions logged against it — but the cursor resets to the start of
+    // the new program. Past sessions remain intact; their programDayIds simply
+    // won't resolve against the new program (Day-vs-Session diff degrades to
+    // "all bonus", which is the documented behaviour after a program swap).
+    state.program = canditoHybridProgram;
+    // Field was briefly named userMaxes during initial implementation; rename
+    // landed before any user ran v5, so we transparently move the value into
+    // trainingMaxes if it happens to exist on a persisted-but-unshipped store.
+    const s = state as TrainingState & {
+      userMaxes?: unknown;
+      trainingMaxes?: unknown;
+      loadingIncrement?: unknown;
+    };
+    if (s.trainingMaxes === undefined) {
+      s.trainingMaxes = s.userMaxes !== undefined ? s.userMaxes : null;
+    }
+    delete s.userMaxes;
+    if (typeof s.loadingIncrement !== 'number') s.loadingIncrement = 2.5;
+  }
+  if (version < 6) {
+    // v6: introduce `lastReadiness` so a same-day cancel+restart doesn't
+    // re-prompt the Readiness check. Existing persisted stores get null —
+    // the next submission populates it.
+    const s = state as TrainingState & { lastReadiness?: unknown };
+    if (s.lastReadiness === undefined) s.lastReadiness = null;
+  }
   return state as TrainingState;
 }
 
@@ -192,9 +243,12 @@ export const useTrainingStore = create<TrainingState>()(
       // and every order-sensitive lib function rely on. `sampleSessions` is
       // generated oldest-first, so reverse it here.
       sessions: [...sampleSessions].reverse(),
-      program: sampleProgram,
+      program: canditoHybridProgram,
       activeSession: null,
       restTimerDuration: 120,
+      trainingMaxes: null,
+      loadingIncrement: 2.5,
+      lastReadiness: null,
 
       startSession: (workoutName, programDayId, exercises) => {
         const session: Session = {
@@ -209,6 +263,10 @@ export const useTrainingStore = create<TrainingState>()(
 
       setReadiness: (readiness) => {
         const { activeSession } = get();
+        // Always record the submission on the global "last readiness" slot,
+        // even if there's no active session yet — so a same-day cancel +
+        // restart can replay it without re-prompting the lifter.
+        set({ lastReadiness: { readiness, timestamp: Date.now() } });
         if (activeSession) {
           set({ activeSession: { ...activeSession, readiness } });
         }
@@ -317,6 +375,23 @@ export const useTrainingStore = create<TrainingState>()(
 
       setRestTimerDuration: (seconds) => set({ restTimerDuration: seconds }),
 
+      setTrainingMaxes: (maxes) => set({ trainingMaxes: maxes }),
+
+      setLoadingIncrement: (increment) => set({ loadingIncrement: increment }),
+
+      restartProgram: () => {
+        const { program } = get();
+        set({
+          program: {
+            ...program,
+            currentBlockIndex: 0,
+            currentWeekIndex: 0,
+            currentDayIndex: 0,
+          },
+          trainingMaxes: null,
+        });
+      },
+
       advanceProgramCursor: () => {
         const { program } = get();
         const result = computeNextCursor(program);
@@ -350,7 +425,7 @@ export const useTrainingStore = create<TrainingState>()(
     }),
     {
       name: 'training-store',
-      version: 4,
+      version: 6,
       migrate: (persistedState, version) => migrate(persistedState, version),
     }
   )

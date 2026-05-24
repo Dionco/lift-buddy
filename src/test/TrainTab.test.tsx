@@ -67,6 +67,8 @@ describe('TrainTab (editorial-industrial redesign)', () => {
   const onStartEmpty = vi.fn();
   const onStartToday = vi.fn();
   const onViewProgram = vi.fn();
+  const onSetupMaxes = vi.fn();
+  const onUpdateMaxes = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -79,6 +81,8 @@ describe('TrainTab (editorial-industrial redesign)', () => {
         onStartEmpty={onStartEmpty}
         onStartToday={onStartToday}
         onViewProgram={onViewProgram}
+        onSetupMaxes={onSetupMaxes}
+        onUpdateMaxes={onUpdateMaxes}
       />
     );
   }
