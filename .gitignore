@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# This project uses bun; npm/yarn lockfiles are not authoritative
+package-lock.json
+yarn.lock
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -26,3 +30,4 @@ dist-ssr
 .claude/
 .agents/.worktrees/
 .agents/
+.vercel

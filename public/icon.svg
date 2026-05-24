@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#F5F2EC"/>
+  <rect x="40" y="40" width="432" height="432" rx="72" fill="none" stroke="#191917" stroke-width="6"/>
+  <g fill="#191917">
+    <rect x="96"  y="232" width="32" height="48" rx="6"/>
+    <rect x="384" y="232" width="32" height="48" rx="6"/>
+    <rect x="136" y="216" width="20" height="80" rx="4"/>
+    <rect x="356" y="216" width="20" height="80" rx="4"/>
+    <rect x="160" y="244" width="192" height="24" rx="6"/>
+  </g>
+  <g fill="#B0492F">
+    <circle cx="172" cy="256" r="6"/>
+    <circle cx="340" cy="256" r="6"/>
+  </g>
+  <text x="256" y="408" text-anchor="middle"
+        font-family="Georgia, 'Source Serif Pro', serif"
+        font-style="italic" font-weight="600" font-size="64"
+        fill="#191917">lift buddy</text>
+</svg>
