@@ -1,0 +1,251 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+  <!-- Background gradient: warm top-left → cold bottom-right with a soft ambient bloom -->
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0"   stop-color="#221814"/>
+    <stop offset="0.55" stop-color="#120c0a"/>
+    <stop offset="1"   stop-color="#070504"/>
+  </linearGradient>
+  <radialGradient id="bg-bloom" cx="0.22" cy="0.18" r="0.7">
+    <stop offset="0"    stop-color="#3a2520" stop-opacity="0.55"/>
+    <stop offset="0.55" stop-color="#3a2520" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="bg-caustic" cx="0.5" cy="0.62" r="0.45">
+    <stop offset="0"   stop-color="#C0492F" stop-opacity="0.22"/>
+    <stop offset="0.6" stop-color="#C0492F" stop-opacity="0"/>
+  </radialGradient>
+
+  <!-- Glass plate fill: luminous tinted glass, top lit, bottom holds shadow.
+       Opacity ~0.78 so the dark background subtly shows through (real glass, not paint). -->
+  <linearGradient id="glass-rust" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0"    stop-color="#E97A5C" stop-opacity="0.82"/>
+    <stop offset="0.45" stop-color="#C0492F" stop-opacity="0.78"/>
+    <stop offset="1"    stop-color="#5A2114" stop-opacity="0.88"/>
+  </linearGradient>
+  <linearGradient id="glass-rust-deep" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0"    stop-color="#7E2F1C" stop-opacity="0.78"/>
+    <stop offset="0.55" stop-color="#5A2114" stop-opacity="0.78"/>
+    <stop offset="1"    stop-color="#2C0F08" stop-opacity="0.85"/>
+  </linearGradient>
+
+  <!-- Soft top sheen: dialled way down — the rim does the heavy lifting, not interior gloss -->
+  <linearGradient id="top-gloss" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0"    stop-color="#FFFFFF" stop-opacity="0.22"/>
+    <stop offset="0.25" stop-color="#FFFFFF" stop-opacity="0.06"/>
+    <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+  </linearGradient>
+
+  <!-- Specular: barely-there diagonal wash -->
+  <linearGradient id="spec" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0"    stop-color="#FFFFFF" stop-opacity="0.20"/>
+    <stop offset="0.3"  stop-color="#FFFFFF" stop-opacity="0.04"/>
+    <stop offset="0.6"  stop-color="#FFFFFF" stop-opacity="0"/>
+  </linearGradient>
+
+  <!-- Under-light: warm refracted glow at bottom of plate (light bouncing off the surface below) -->
+  <linearGradient id="under-light" x1="0" y1="1" x2="0" y2="0">
+    <stop offset="0"    stop-color="#FF9C7A" stop-opacity="0.32"/>
+    <stop offset="0.3"  stop-color="#FF9C7A" stop-opacity="0.06"/>
+    <stop offset="0.6"  stop-color="#FF9C7A" stop-opacity="0"/>
+  </linearGradient>
+
+  <!-- Rim stroke: very bright top edge, faint mid, warm under-light at bottom -->
+  <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0"    stop-color="#FFFFFF" stop-opacity="0.98"/>
+    <stop offset="0.18" stop-color="#FFFFFF" stop-opacity="0.55"/>
+    <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.10"/>
+    <stop offset="0.75" stop-color="#FFB89A" stop-opacity="0.18"/>
+    <stop offset="1"    stop-color="#FFC9AC" stop-opacity="0.55"/>
+  </linearGradient>
+
+  <!-- Bar: polished chrome/glass -->
+  <linearGradient id="bar-fill" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0"    stop-color="#FFFFFF"/>
+    <stop offset="0.3"  stop-color="#F5F2EC"/>
+    <stop offset="0.55" stop-color="#D8D3C4"/>
+    <stop offset="1"    stop-color="#9C9789"/>
+  </linearGradient>
+  <linearGradient id="bar-shine" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0"    stop-color="#FFFFFF" stop-opacity="0"/>
+    <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.85"/>
+    <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0.85"/>
+    <stop offset="1"    stop-color="#FFFFFF" stop-opacity="0"/>
+  </linearGradient>
+
+  <!-- Inner shadow: subtle, gives depth without darkening the whole plate -->
+  <filter id="inner-shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="8"/>
+    <feOffset dx="3" dy="10" result="off"/>
+    <feComposite in="off" in2="SourceAlpha" operator="arithmetic" k2="-1" k3="1" result="inner"/>
+    <feColorMatrix in="inner" type="matrix" values="
+      0 0 0 0 0.05
+      0 0 0 0 0.02
+      0 0 0 0 0.01
+      0 0 0 0.32 0"/>
+  </filter>
+
+  <!-- Soft drop shadow / contact shadow under each plate -->
+  <filter id="contact" x="-30%" y="-30%" width="160%" height="180%">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="18"/>
+    <feOffset dx="0" dy="22"/>
+    <feColorMatrix type="matrix" values="
+      0 0 0 0 0
+      0 0 0 0 0
+      0 0 0 0 0
+      0 0 0 0.7 0"/>
+  </filter>
+
+  <!-- Coloured caustic under plates -->
+  <filter id="caustic" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur in="SourceGraphic" stdDeviation="42"/>
+  </filter>
+
+  <!-- Soft blur for the specular pinpoint so it doesn't look like a hard ellipse -->
+  <filter id="soft-blur" x="-40%" y="-40%" width="180%" height="180%">
+    <feGaussianBlur in="SourceGraphic" stdDeviation="14"/>
+  </filter>
+
+  <!-- ClipPaths so highlights stay inside each plate -->
+  <clipPath id="clip-ip-l"><rect x="184" y="228" width="208" height="568" rx="38"/></clipPath>
+  <clipPath id="clip-ip-r"><rect x="632" y="228" width="208" height="568" rx="38"/></clipPath>
+  <clipPath id="clip-op-l"><rect x="114" y="282" width="116" height="460" rx="28"/></clipPath>
+  <clipPath id="clip-op-r"><rect x="794" y="282" width="116" height="460" rx="28"/></clipPath>
+  <clipPath id="clip-bar"><rect x="392" y="480" width="240" height="60" rx="14"/></clipPath>
+</defs>
+  <!-- caustics behind everything -->
+  
+    
+    <ellipse cx="172" cy="760" rx="63.800000000000004" ry="46" fill="#7E2F1C" opacity="0.28" filter="url(#caustic)"/>
+  
+    
+    <ellipse cx="852" cy="760" rx="63.800000000000004" ry="46" fill="#7E2F1C" opacity="0.28" filter="url(#caustic)"/>
+  
+    
+    <ellipse cx="288" cy="814" rx="114.4" ry="56.800000000000004" fill="#C0492F" opacity="0.42" filter="url(#caustic)"/>
+  
+    
+    <ellipse cx="736" cy="814" rx="114.4" ry="56.800000000000004" fill="#C0492F" opacity="0.42" filter="url(#caustic)"/>
+  
+  
+  <!-- outer plates (back) -->
+  
+    <!-- contact shadow -->
+    <g filter="url(#contact)">
+      <rect x="114" y="282" width="116" height="460" rx="28" fill="#000"/>
+    </g>
+    <!-- base glass fill (translucent) -->
+    <rect x="114" y="282" width="116" height="460" rx="28" fill="url(#glass-rust-deep)"/>
+    <!-- inner shadow -->
+    <rect x="114" y="282" width="116" height="460" rx="28" fill="#000" filter="url(#inner-shadow)"/>
+    <g clip-path="url(#clip-op-l)">
+      <!-- soft full-height top sheen (dispersed, no hard edge) -->
+      <rect x="114" y="282" width="116" height="460" fill="url(#top-gloss)"/>
+      <!-- warm under-light at bottom -->
+      <rect x="114" y="282" width="116" height="460" fill="url(#under-light)"/>
+      <!-- subtle diagonal specular wash -->
+      <rect x="114" y="282" width="116" height="253.00000000000003" fill="url(#spec)"/>
+      <!-- soft specular pinpoint (heavily blurred so it reads as a glint, not a shape) -->
+      <ellipse cx="148.8" cy="355.6" rx="34.104" ry="16.56"
+               fill="#FFFFFF" opacity="0.22"
+               transform="rotate(28 148.8 355.6)"
+               filter="url(#soft-blur)"/>
+    </g>
+    <!-- rim stroke on top: bright above, warm under-light below — slightly thicker for read at small sizes -->
+    <rect x="115.5" y="283.5" width="113" height="457" rx="27.5"
+          fill="none" stroke="url(#rim)" stroke-width="3"/>
+  
+  
+    <!-- contact shadow -->
+    <g filter="url(#contact)">
+      <rect x="794" y="282" width="116" height="460" rx="28" fill="#000"/>
+    </g>
+    <!-- base glass fill (translucent) -->
+    <rect x="794" y="282" width="116" height="460" rx="28" fill="url(#glass-rust-deep)"/>
+    <!-- inner shadow -->
+    <rect x="794" y="282" width="116" height="460" rx="28" fill="#000" filter="url(#inner-shadow)"/>
+    <g clip-path="url(#clip-op-r)">
+      <!-- soft full-height top sheen (dispersed, no hard edge) -->
+      <rect x="794" y="282" width="116" height="460" fill="url(#top-gloss)"/>
+      <!-- warm under-light at bottom -->
+      <rect x="794" y="282" width="116" height="460" fill="url(#under-light)"/>
+      <!-- subtle diagonal specular wash -->
+      <rect x="794" y="282" width="116" height="253.00000000000003" fill="url(#spec)"/>
+      <!-- soft specular pinpoint (heavily blurred so it reads as a glint, not a shape) -->
+      <ellipse cx="828.8" cy="355.6" rx="34.104" ry="16.56"
+               fill="#FFFFFF" opacity="0.22"
+               transform="rotate(28 828.8 355.6)"
+               filter="url(#soft-blur)"/>
+    </g>
+    <!-- rim stroke on top: bright above, warm under-light below — slightly thicker for read at small sizes -->
+    <rect x="795.5" y="283.5" width="113" height="457" rx="27.5"
+          fill="none" stroke="url(#rim)" stroke-width="3"/>
+  
+  <!-- bar -->
+  
+    <g filter="url(#contact)">
+      <rect x="392" y="480" width="240" height="60" rx="14" fill="#000"/>
+    </g>
+    <rect x="392" y="480" width="240" height="60" rx="14" fill="url(#bar-fill)"/>
+    <g clip-path="url(#clip-bar)">
+      <!-- bright horizontal shine band across the middle -->
+      <rect x="392" y="490.8" width="240" height="33" fill="url(#bar-shine)"/>
+      <!-- top thin gloss -->
+      <rect x="395" y="482" width="234" height="16.8" rx="13" fill="#FFFFFF" opacity="0.55"/>
+    </g>
+    <rect x="392.5" y="480.5" width="239" height="59" rx="13.7"
+          fill="none" stroke="url(#rim)" stroke-width="1.5"/>
+  
+  <!-- inner plates (front) -->
+  
+    <!-- contact shadow -->
+    <g filter="url(#contact)">
+      <rect x="184" y="228" width="208" height="568" rx="38" fill="#000"/>
+    </g>
+    <!-- base glass fill (translucent) -->
+    <rect x="184" y="228" width="208" height="568" rx="38" fill="url(#glass-rust)"/>
+    <!-- inner shadow -->
+    <rect x="184" y="228" width="208" height="568" rx="38" fill="#000" filter="url(#inner-shadow)"/>
+    <g clip-path="url(#clip-ip-l)">
+      <!-- soft full-height top sheen (dispersed, no hard edge) -->
+      <rect x="184" y="228" width="208" height="568" fill="url(#top-gloss)"/>
+      <!-- warm under-light at bottom -->
+      <rect x="184" y="228" width="208" height="568" fill="url(#under-light)"/>
+      <!-- subtle diagonal specular wash -->
+      <rect x="184" y="228" width="208" height="312.40000000000003" fill="url(#spec)"/>
+      <!-- soft specular pinpoint (heavily blurred so it reads as a glint, not a shape) -->
+      <ellipse cx="246.4" cy="318.88" rx="61.151999999999994" ry="20.448"
+               fill="#FFFFFF" opacity="0.22"
+               transform="rotate(28 246.4 318.88)"
+               filter="url(#soft-blur)"/>
+    </g>
+    <!-- rim stroke on top: bright above, warm under-light below — slightly thicker for read at small sizes -->
+    <rect x="185.5" y="229.5" width="205" height="565" rx="37.5"
+          fill="none" stroke="url(#rim)" stroke-width="3"/>
+  
+  
+    <!-- contact shadow -->
+    <g filter="url(#contact)">
+      <rect x="632" y="228" width="208" height="568" rx="38" fill="#000"/>
+    </g>
+    <!-- base glass fill (translucent) -->
+    <rect x="632" y="228" width="208" height="568" rx="38" fill="url(#glass-rust)"/>
+    <!-- inner shadow -->
+    <rect x="632" y="228" width="208" height="568" rx="38" fill="#000" filter="url(#inner-shadow)"/>
+    <g clip-path="url(#clip-ip-r)">
+      <!-- soft full-height top sheen (dispersed, no hard edge) -->
+      <rect x="632" y="228" width="208" height="568" fill="url(#top-gloss)"/>
+      <!-- warm under-light at bottom -->
+      <rect x="632" y="228" width="208" height="568" fill="url(#under-light)"/>
+      <!-- subtle diagonal specular wash -->
+      <rect x="632" y="228" width="208" height="312.40000000000003" fill="url(#spec)"/>
+      <!-- soft specular pinpoint (heavily blurred so it reads as a glint, not a shape) -->
+      <ellipse cx="694.4" cy="318.88" rx="61.151999999999994" ry="20.448"
+               fill="#FFFFFF" opacity="0.22"
+               transform="rotate(28 694.4 318.88)"
+               filter="url(#soft-blur)"/>
+    </g>
+    <!-- rim stroke on top: bright above, warm under-light below — slightly thicker for read at small sizes -->
+    <rect x="633.5" y="229.5" width="205" height="565" rx="37.5"
+          fill="none" stroke="url(#rim)" stroke-width="3"/>
+  
+</svg>

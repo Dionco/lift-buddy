@@ -1,105 +1,192 @@
 import { useState } from 'react';
 import { ReadinessCheckIn } from '@/types/training';
-import { Slider } from '@/components/ui/slider';
-import { Moon, Zap, AlertCircle } from 'lucide-react';
 
 interface ReadinessCheckProps {
   onSubmit: (readiness: ReadinessCheckIn) => void;
   onSkip: () => void;
 }
 
+// Thresholds mirror docs/powerlifting-knowledge.md: sleep < 6h, energy ≤ 2,
+// soreness ≥ 4 each trigger a flag. The readout block reflects the user's
+// signals back to them and tells them how to scale the session.
+function interpret({ sleep, energy, soreness }: ReadinessCheckIn) {
+  const flags: string[] = [];
+  if (sleep < 6)
+    flags.push(`Sleep is low (${sleep}h). Consider cutting top-set intensity by ~5–10%.`);
+  if (energy <= 2)
+    flags.push(`Energy is low (${energy}/5). Cut total volume 20–30% — skip PRs.`);
+  if (soreness >= 4)
+    flags.push(
+      `High residual soreness (${soreness}/5). Reduce volume in the still-sore muscles, or shift the day.`,
+    );
+  if (flags.length === 0) {
+    return {
+      status: 'good' as const,
+      heading: 'Green light',
+      body: 'No fatigue flags. Train as prescribed — push the top set if it moves well.',
+    };
+  }
+  return {
+    status: 'flagged' as const,
+    heading: `${flags.length} signal${flags.length > 1 ? 's' : ''} flagged`,
+    body: flags.join(' '),
+  };
+}
+
+interface ScaleBtnProps {
+  value: number;
+  label: string;
+  active: boolean;
+  lowFlag?: boolean;
+  onClick: (v: number) => void;
+}
+
+function ScaleBtn({ value, label, active, lowFlag, onClick }: ScaleBtnProps) {
+  return (
+    <button
+      type="button"
+      className={`rd-scale-btn ${active ? 'is-active' : ''} ${active && lowFlag ? 'is-low' : ''}`}
+      onClick={() => onClick(value)}
+    >
+      <span>{value}</span>
+      <span className="lbl">{label}</span>
+    </button>
+  );
+}
+
 export function ReadinessCheck({ onSubmit, onSkip }: ReadinessCheckProps) {
   const [sleep, setSleep] = useState(7);
-  const [energy, setEnergy] = useState(3);
+  const [energy, setEnergy] = useState(4);
   const [soreness, setSoreness] = useState(2);
 
+  const readout = interpret({ sleep, energy, soreness });
+
   return (
-    <div className="flex min-h-screen flex-col justify-between p-6 pb-24">
-      <div>
-        <h2 className="text-xl font-bold text-foreground mb-1">How are you feeling?</h2>
-        <p className="text-sm text-muted-foreground mb-8">Quick check before your session</p>
+    <div className="rd-backdrop" onClick={onSkip}>
+      <div className="rd-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="rd-grab" />
 
-        <div className="flex flex-col gap-8">
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Moon className="h-5 w-5 text-primary" />
-              <span className="font-semibold">Sleep</span>
-              <span className="ml-auto text-2xl font-bold tabular-nums">{sleep}h</span>
+        <div className="rd-head">
+          <div className="rd-eyebrow">Check-in · Before session</div>
+          <h2 className="rd-title">How are you feeling?</h2>
+          <p className="rd-sub">
+            Three quick reads. The session adjusts itself based on what you log.
+          </p>
+        </div>
+
+        <div className="rd-body">
+          {/* SLEEP — stepper */}
+          <div className="rd-group">
+            <div className="rd-group-head">
+              <div className="rd-group-lbl">
+                <span>Sleep</span>
+                <span className="ix">LAST NIGHT</span>
+              </div>
+              <div className="rd-group-val">
+                <span>{sleep}</span>
+                <span className="u">HRS</span>
+              </div>
             </div>
-            <Slider
-              value={[sleep]}
-              onValueChange={([v]) => setSleep(v)}
-              min={4}
-              max={10}
-              step={0.5}
-              className="py-2"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground mt-1">
-              <span>4h</span><span>10h</span>
+            <div className="rd-sleep">
+              <button
+                type="button"
+                className="rd-sleep-btn"
+                onClick={() => setSleep((s) => Math.max(4, +(s - 0.5).toFixed(1)))}
+                disabled={sleep <= 4}
+                aria-label="Less sleep"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+              <div className="rd-sleep-val">
+                <span className="v">{sleep}</span>
+                <span className="u">hrs</span>
+              </div>
+              <button
+                type="button"
+                className="rd-sleep-btn"
+                onClick={() => setSleep((s) => Math.min(10, +(s + 0.5).toFixed(1)))}
+                disabled={sleep >= 10}
+                aria-label="More sleep"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                </svg>
+              </button>
+            </div>
+            <div className="rd-sleep-scale">
+              <span>4 LOW</span>
+              <span>7 IDEAL</span>
+              <span>10 HIGH</span>
             </div>
           </div>
 
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Zap className="h-5 w-5 text-primary" />
-              <span className="font-semibold">Energy</span>
-              <span className="ml-auto text-2xl font-bold tabular-nums">{energy}/5</span>
+          {/* ENERGY — 1..5 */}
+          <div className="rd-group">
+            <div className="rd-group-head">
+              <div className="rd-group-lbl">
+                <span>Energy</span>
+                <span className="ix">RIGHT NOW</span>
+              </div>
+              <div className="rd-group-val">
+                <span>{energy}</span>
+                <span className="u">/ 5</span>
+              </div>
             </div>
-            <div className="flex gap-2">
-              {[1, 2, 3, 4, 5].map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setEnergy(v)}
-                  className={`flex-1 min-h-[48px] rounded-lg border text-lg font-semibold transition-colors ${
-                    energy === v
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : 'border-border bg-card text-foreground'
-                  }`}
-                >
-                  {v}
-                </button>
-              ))}
+            <div className="rd-scale">
+              <ScaleBtn value={1} label="Flat" active={energy === 1} onClick={setEnergy} lowFlag />
+              <ScaleBtn value={2} label="Low" active={energy === 2} onClick={setEnergy} lowFlag />
+              <ScaleBtn value={3} label="OK" active={energy === 3} onClick={setEnergy} />
+              <ScaleBtn value={4} label="Good" active={energy === 4} onClick={setEnergy} />
+              <ScaleBtn value={5} label="Primed" active={energy === 5} onClick={setEnergy} />
             </div>
           </div>
 
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <AlertCircle className="h-5 w-5 text-primary" />
-              <span className="font-semibold">Soreness</span>
-              <span className="ml-auto text-2xl font-bold tabular-nums">{soreness}/5</span>
+          {/* SORENESS — 1..5 */}
+          <div className="rd-group">
+            <div className="rd-group-head">
+              <div className="rd-group-lbl">
+                <span>Soreness</span>
+                <span className="ix">TRAINED MUSCLES</span>
+              </div>
+              <div className="rd-group-val">
+                <span>{soreness}</span>
+                <span className="u">/ 5</span>
+              </div>
             </div>
-            <div className="flex gap-2">
-              {[1, 2, 3, 4, 5].map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setSoreness(v)}
-                  className={`flex-1 min-h-[48px] rounded-lg border text-lg font-semibold transition-colors ${
-                    soreness === v
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : 'border-border bg-card text-foreground'
-                  }`}
-                >
-                  {v}
-                </button>
-              ))}
+            <div className="rd-scale">
+              <ScaleBtn value={1} label="None" active={soreness === 1} onClick={setSoreness} />
+              <ScaleBtn value={2} label="Mild" active={soreness === 2} onClick={setSoreness} />
+              <ScaleBtn value={3} label="Mod" active={soreness === 3} onClick={setSoreness} />
+              <ScaleBtn value={4} label="Heavy" active={soreness === 4} onClick={setSoreness} lowFlag />
+              <ScaleBtn value={5} label="Acute" active={soreness === 5} onClick={setSoreness} lowFlag />
             </div>
+          </div>
+
+          {/* READOUT */}
+          <div className={`rd-readout ${readout.status === 'flagged' ? 'is-flagged' : ''}`}>
+            <div className="rd-readout-head">
+              <span className="dot" />
+              <span>{readout.heading}</span>
+            </div>
+            <div className="rd-readout-body">{readout.body}</div>
           </div>
         </div>
-      </div>
 
-      <div className="flex flex-col gap-3 mt-8">
-        <button
-          onClick={() => onSubmit({ sleep, energy, soreness })}
-          className="min-h-[52px] w-full rounded-xl bg-primary font-semibold text-primary-foreground active:scale-[0.98] transition-transform"
-        >
-          Continue
-        </button>
-        <button
-          onClick={onSkip}
-          className="min-h-[48px] w-full rounded-xl text-muted-foreground font-medium"
-        >
-          Skip
-        </button>
+        <div className="rd-actions">
+          <button type="button" className="rd-act-secondary" onClick={onSkip}>
+            Skip
+          </button>
+          <button
+            type="button"
+            className="rd-act-primary"
+            onClick={() => onSubmit({ sleep, energy, soreness })}
+          >
+            Save<span className="arrow">→</span>
+          </button>
+        </div>
       </div>
     </div>
   );
