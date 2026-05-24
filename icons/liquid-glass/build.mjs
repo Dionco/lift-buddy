@@ -19,9 +19,9 @@ const out = (name) => path.join(here, name);
 const BG_TOP = "#221814";     // warm dark, top-left lit
 const BG_MID = "#120c0a";
 const BG_BOT = "#070504";     // deep shadow, bottom-right
-const RUST   = "#C0492F";     // brand rust orange
-const RUST_D = "#7E2F1C";     // shadow side of rust
-const CREAM  = "#F5F2EC";
+const RUST   = "#D85730";     // brand rust orange
+const RUST_D = "#8C3520";     // shadow side of rust
+const CREAM  = "#FAF6EE";
 
 // ─────────────────────── Geometry (1024) ────────────────────
 const W = 1024, H = 1024;
@@ -276,7 +276,7 @@ await writeFile(out("foreground.svg"), foregroundSvg);
 await writeFile(out("icon.svg"),       composedSvg);
 
 const svgBuffer = Buffer.from(composedSvg);
-for (const size of [1024, 512, 256, 180]) {
+for (const size of [1024, 512, 256, 192, 180, 64]) {
   await sharp(svgBuffer, { density: 384 })
     .resize(size, size)
     .png({ compressionLevel: 9 })

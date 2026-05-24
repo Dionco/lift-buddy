@@ -11,15 +11,15 @@
     <stop offset="0.55" stop-color="#3a2520" stop-opacity="0"/>
   </radialGradient>
   <radialGradient id="bg-caustic" cx="0.5" cy="0.62" r="0.45">
-    <stop offset="0"   stop-color="#C0492F" stop-opacity="0.22"/>
-    <stop offset="0.6" stop-color="#C0492F" stop-opacity="0"/>
+    <stop offset="0"   stop-color="#D85730" stop-opacity="0.22"/>
+    <stop offset="0.6" stop-color="#D85730" stop-opacity="0"/>
   </radialGradient>
 
   <!-- Glass plate fill: luminous tinted glass, top lit, bottom holds shadow.
        Opacity ~0.78 so the dark background subtly shows through (real glass, not paint). -->
   <linearGradient id="glass-rust" x1="0" y1="0" x2="0" y2="1">
     <stop offset="0"    stop-color="#E97A5C" stop-opacity="0.82"/>
-    <stop offset="0.45" stop-color="#C0492F" stop-opacity="0.78"/>
+    <stop offset="0.45" stop-color="#D85730" stop-opacity="0.78"/>
     <stop offset="1"    stop-color="#5A2114" stop-opacity="0.88"/>
   </linearGradient>
   <linearGradient id="glass-rust-deep" x1="0" y1="0" x2="0" y2="1">
@@ -61,7 +61,7 @@
   <!-- Bar: polished chrome/glass -->
   <linearGradient id="bar-fill" x1="0" y1="0" x2="0" y2="1">
     <stop offset="0"    stop-color="#FFFFFF"/>
-    <stop offset="0.3"  stop-color="#F5F2EC"/>
+    <stop offset="0.3"  stop-color="#FAF6EE"/>
     <stop offset="0.55" stop-color="#D8D3C4"/>
     <stop offset="1"    stop-color="#9C9789"/>
   </linearGradient>
@@ -119,16 +119,16 @@
   <!-- foreground stack -->
   
     
-    <ellipse cx="172" cy="760" rx="63.800000000000004" ry="46" fill="#7E2F1C" opacity="0.28" filter="url(#caustic)"/>
+    <ellipse cx="172" cy="760" rx="63.800000000000004" ry="46" fill="#8C3520" opacity="0.28" filter="url(#caustic)"/>
   
     
-    <ellipse cx="852" cy="760" rx="63.800000000000004" ry="46" fill="#7E2F1C" opacity="0.28" filter="url(#caustic)"/>
+    <ellipse cx="852" cy="760" rx="63.800000000000004" ry="46" fill="#8C3520" opacity="0.28" filter="url(#caustic)"/>
   
     
-    <ellipse cx="288" cy="814" rx="114.4" ry="56.800000000000004" fill="#C0492F" opacity="0.42" filter="url(#caustic)"/>
+    <ellipse cx="288" cy="814" rx="114.4" ry="56.800000000000004" fill="#D85730" opacity="0.42" filter="url(#caustic)"/>
   
     
-    <ellipse cx="736" cy="814" rx="114.4" ry="56.800000000000004" fill="#C0492F" opacity="0.42" filter="url(#caustic)"/>
+    <ellipse cx="736" cy="814" rx="114.4" ry="56.800000000000004" fill="#D85730" opacity="0.42" filter="url(#caustic)"/>
   
   
   
