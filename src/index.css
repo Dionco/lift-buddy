@@ -3585,7 +3585,7 @@
 .mb2-anchor {
   position: fixed;
   left: 12px; right: 12px;
-  bottom: calc(82px + env(safe-area-inset-bottom));
+  bottom: calc(66px + env(safe-area-inset-bottom));
   z-index: 49;
   pointer-events: none;
   transform: translateY(160%);
