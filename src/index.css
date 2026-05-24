@@ -132,8 +132,8 @@
   display: grid; grid-template-columns: repeat(3, 1fr);
   border-top: 1px solid var(--rule);
   background: var(--card-fill);
-  padding: 8px 4px 12px;
-  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  padding: 4px 4px 2px;
+  padding-bottom: calc(2px + env(safe-area-inset-bottom));
 }
 .lb-bn-item {
   display: flex; flex-direction: column; align-items: center; gap: 3px;
@@ -439,7 +439,7 @@
 
 .tv-top {
   display: flex; justify-content: space-between; align-items: baseline;
-  padding: 16px 18px 6px;
+  padding: 6px 18px 6px;
 }
 .tv-eyebrow {
   font-family: var(--f-mono); font-size: 10px;
