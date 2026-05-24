@@ -39,6 +39,13 @@ interface UIExercise {
   relatedTo?: string;
   muscles: string[];
   prescription?: { sets: number; reps: string; rpeTarget?: number; notes?: string };
+  /** Weight derived from `prescription.loadPercentage × TrainingMax`, rounded
+   *  to the lifter's loading increment. When present this is the authoritative
+   *  "what to lift today" — the program says so explicitly — and it overrides
+   *  the previous-top fallback on every TARGET / pre-fill / apply-target
+   *  surface. Null when the prescription is RPE-only or the lifter has not
+   *  entered their Training Maxes yet. */
+  prescribedWeight: number | null;
   prevTop: SetLog | null;
   /** Completed sets from the most recent session that performed this exercise.
    *  Used by the PREVIOUS column on accessory lifts. */
@@ -108,6 +115,7 @@ function buildInitial(
       relatedTo: log.exercise.relatedTo,
       muscles: log.exercise.primaryMuscles ?? [],
       prescription: pe?.prescription,
+      prescribedWeight,
       prevTop,
       prevSets,
       sets: log.sets.map((s, i) => {
@@ -434,13 +442,20 @@ function SetRow({ ex, set, setIdx, active, onFocus, onToggleDone, onApplyTarget,
   const prevSet = ex.prevSets[setIdx];
 
   // Main lifts and Variations (per ADR-0009 / Q5) anchor TARGET on the
-  // previous top set + prescription. Accessories anchor on what was performed
-  // for the same set last time, so the lifter can match it (Double Progression).
+  // prescription. Accessories anchor on what was performed for the same set
+  // last time, so the lifter can match it (Double Progression).
+  //
+  // Weight priority for the TARGET surface:
+  //   1. `ex.prescribedWeight` — explicit program contract (% × Training Max)
+  //   2. `ex.prevTop.weight`   — fallback when the prescription is RPE-only
+  // The LAST TOP line above the table still shows history independently, so
+  // there's no information loss when the prescribed weight wins.
   const useTopAnchor = isMainOrVariation(ex);
+  const targetWeight = ex.prescribedWeight ?? ex.prevTop?.weight ?? null;
   const targetContent = useTopAnchor ? (
     ex.prescription ? (
       <>
-        {ex.prevTop && <span className="w">{ex.prevTop.weight}</span>}
+        {targetWeight != null && <span className="w">{targetWeight}</span>}
         <span className="x">×</span>
         <span className="reps">{ex.prescription.reps}</span>
         {ex.prescription.rpeTarget != null && (
@@ -462,8 +477,8 @@ function SetRow({ ex, set, setIdx, active, onFocus, onToggleDone, onApplyTarget,
   );
 
   const targetTitle = useTopAnchor
-    ? ex.prevTop
-      ? `Tap to use previous: ${ex.prevTop.weight}kg × ${ex.prescription?.reps ?? ex.prevTop.reps}`
+    ? targetWeight != null
+      ? `Tap to apply target: ${targetWeight}kg × ${ex.prescription?.reps ?? ex.prevTop?.reps ?? ''}`
       : 'Tap to apply target'
     : prevSet
       ? `Tap to use previous: ${prevSet.weight}kg × ${prevSet.reps} @${prevSet.rpe}`
@@ -921,12 +936,14 @@ export function ActiveWorkout({
     const setIndex = setIndexFromId(setId);
     // Accessory lifts pull from the matching set of the previous session; main
     // lifts pull from the prescription (sets × prescribed reps @ rpeTarget,
-    // with weight from the previous top set).
+    // with weight from the explicit prescribed weight when present, else from
+    // the previous top set as a fallback for RPE-only prescriptions).
     const prevSet = !isMainOrVariation(ex) ? ex.prevSets[setIndex] : undefined;
+    const targetWeight = ex.prescribedWeight ?? ex.prevTop?.weight ?? null;
     const weight = prevSet
       ? String(prevSet.weight)
-      : ex.prevTop
-        ? String(ex.prevTop.weight)
+      : targetWeight != null
+        ? String(targetWeight)
         : '';
     const reps = prevSet
       ? String(prevSet.reps)
@@ -942,7 +959,7 @@ export function ActiveWorkout({
     const patch: Partial<SetLog> = {};
     if (rpe > 0) patch.rpe = rpe;
     if (prevSet) patch.weight = prevSet.weight;
-    else if (ex.prevTop) patch.weight = ex.prevTop.weight;
+    else if (targetWeight != null) patch.weight = targetWeight;
     if (Number.isFinite(repsParsed)) patch.reps = repsParsed;
     updateSetInStore(exId, setIndex, patch);
   };
