@@ -305,7 +305,7 @@ export const useTrainingStore = create<TrainingState>()(
           workoutName,
           programDayId,
         };
-        set({ activeSession: session });
+        set({ activeSession: session, restEndsAt: null });
       },
 
       setReadiness: (readiness) => {
@@ -431,10 +431,11 @@ export const useTrainingStore = create<TrainingState>()(
         set({
           sessions: [finished, ...sessions],
           activeSession: null,
+          restEndsAt: null,
         });
       },
 
-      cancelSession: () => set({ activeSession: null }),
+      cancelSession: () => set({ activeSession: null, restEndsAt: null }),
 
       setRestTimerDuration: (seconds) => set({ restTimerDuration: seconds }),
 

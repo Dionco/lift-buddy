@@ -42,3 +42,36 @@ describe('rest timer store slice', () => {
     expect(second).toBe(Date.now() + 120_000);
   });
 });
+
+describe('rest timer cleared on session boundaries', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-25T10:00:00Z'));
+    localStorage.clear();
+    useTrainingStore.setState({
+      activeSession: {
+        id: 'session-test',
+        startTime: Date.now(),
+        exercises: [],
+      },
+      restEndsAt: Date.now() + 60_000,
+    });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('cancelSession() clears restEndsAt', () => {
+    useTrainingStore.getState().cancelSession();
+    expect(useTrainingStore.getState().restEndsAt).toBeNull();
+  });
+
+  it('finishSession() clears restEndsAt', () => {
+    useTrainingStore.getState().finishSession();
+    expect(useTrainingStore.getState().restEndsAt).toBeNull();
+  });
+
+  it('startSession() resets restEndsAt to null even if one was lingering', () => {
+    useTrainingStore.setState({ activeSession: null, restEndsAt: 9999999999999 });
+    useTrainingStore.getState().startSession('Test workout');
+    expect(useTrainingStore.getState().restEndsAt).toBeNull();
+  });
+});
