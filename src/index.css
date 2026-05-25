@@ -3298,13 +3298,42 @@
   -webkit-user-select: none;
   user-select: none;
 }
+/* Each card is wrapped in `.swipeable` (overflow: hidden + a white
+   `.swipeable-track` covering an absolutely-positioned `.swipeable-delete`).
+   During reorder, three things in that wrapper fight the displacement:
+
+   1. `.swipeable`'s `overflow: hidden` clips any `.eb2` that translates
+      past its bounds (sibling displacement, large drag-y) — without this
+      rule the translated card vanishes and the swipeable's own white
+      shows through.
+
+   2. The `.swipeable-track` keeps a white background to hide the delete
+      reveal at rest. Every track lives at `z-index: 1`, so they all tie
+      in stacking and the browser falls back to DOM order — the
+      dragged/later-DOM card's track paints *over* a sibling's translated
+      `.eb2` whenever they share a slot. With tracks transparent during
+      reorder, the translated `.eb2` always wins the slot.
+
+   3. The `.swipeable-delete` (red, z:0, right-anchored) becomes visible
+      when an `.eb2` is mid-transition and not fully covering its slot.
+      Hide it for the duration.
+
+   Swipe-to-delete is paused during reorder (Swipeable's gesture bails on
+   vertical motion), so dropping the track background and the delete is
+   safe — neither is reachable until the reorder ends. */
+.ses-stack.is-reordering .swipeable {
+  overflow: visible;
+}
+.ses-stack.is-reordering .swipeable-track {
+  background: transparent;
+}
+.ses-stack.is-reordering .swipeable-delete {
+  visibility: hidden;
+}
 .eb2-head {
   display: grid; grid-template-columns: 1fr auto auto; gap: 8px;
   align-items: center;
   padding: 10px 12px 4px;
-  /* Drag handle for the long-press reorder gesture: suppress the OS-native
-     long-press text-selection / magnifier / context-menu so our 350ms timer
-     can claim the press instead of iOS Safari's selection callout. */
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
@@ -3350,14 +3379,27 @@
   border-radius: 999px;
   border: 1px solid var(--rule);
 }
-.eb2-more {
-  width: 32px; height: 32px;
+/* Drag-to-reorder grip. The press surface for the long-press → drag
+   gesture lives ONLY here, not on `.eb2-head`. iOS Safari samples
+   `touch-action` at touchstart and won't release a touch it has already
+   committed to scrolling, so the handle must declare `none` before any
+   finger lands. The rest of the header keeps default behaviour, so users
+   can still scroll the stack by starting their touch on the card body or
+   name area. */
+.eb2-grip {
+  width: 36px; height: 36px;
   display: grid; place-items: center;
-  color: var(--muted);
+  color: var(--muted-2);
   border-radius: 8px;
-  background: none; border: none; cursor: pointer;
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
-.eb2-more:active { background: var(--paper-2); }
+.eb2-grip:active { cursor: grabbing; background: var(--paper-2); }
+.eb2.is-dragging .eb2-grip { cursor: grabbing; color: var(--ink); }
 .eb2-meta {
   display: flex; align-items: center; gap: 10px;
   padding: 0 12px 6px;

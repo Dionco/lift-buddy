@@ -13,17 +13,17 @@ Let the lifter re-order the exercises in the currently-active session via long-p
 - Editing program/template exercise order (the template is unchanged — reorder is a per-session view).
 - Reordering sets within an exercise (sets still keep tap-to-focus and swipe-to-delete).
 - Keyboard accessibility this iteration. The app is a mobile-only PWA; desktop is not a target.
-- A "reorder mode" toggle, kebab actions, or always-visible grip handle. Long-press on the header is the single, discoverable gesture.
+- A "reorder mode" toggle or kebab actions. The single gesture is long-press + drag on the always-visible grip handle (`.eb2-grip`, a `⋮⋮` icon on the right of each card header). The grip exists because iOS Safari samples `touch-action` at touchstart and won't release a touch it has committed to scrolling — long-press on the full header lost the race to native scroll, so the press surface is scoped to a dedicated element with `touch-action: none`. The rest of the card keeps `touch-action: pan-y` so scrolling the stack still works from anywhere except the grip.
 
 ## Interaction model
 
 State machine for one card's gesture:
 
 ```
-idle ── pointerdown on .eb2-head ──► armed (350ms timer running)
-armed ── move >8px before timeout ──► idle  (user was scrolling/tapping)
-armed ── pointerup before timeout ──► idle  (regular tap on header — no-op)
-armed ── timer fires (still on header, no move) ──► dragging
+idle ── pointerdown on .eb2-grip ──► armed (350ms timer running)
+armed ── move >8px before timeout ──► idle  (rejected — treated as a stray touch on the grip)
+armed ── pointerup before timeout ──► idle  (regular tap on grip — no-op)
+armed ── timer fires (still on grip, no move) ──► dragging
                                                      │
                                                      ├── pointermove ──► translateY the dragged card, displace siblings as midpoints cross
                                                      ├── pointer near top/bottom edge ──► autoscroll ses-stack

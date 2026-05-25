@@ -610,7 +610,7 @@ function ExerciseBlock({
       className={`eb2 ${ex.isMainLift ? 'is-main' : ''} ${isCurrent ? 'is-current' : ''} ${isDragging ? 'is-dragging' : ''} ${!isDragging && displacement !== 0 ? 'is-displaced' : ''}`}
       style={rootStyle}
     >
-      <div className="eb2-head" {...(dragHandleProps ?? {})}>
+      <div className="eb2-head">
         <div className="eb2-head-l">
           <div className="eb2-eyebrow">
             {ex.isMainLift && <span className="tag">MAIN</span>}
@@ -629,13 +629,25 @@ function ExerciseBlock({
             {ex.prescription.rpeTarget != null ? ` @${ex.prescription.rpeTarget}` : ''}
           </span>
         )}
-        <button type="button" className="eb2-more" aria-label="More">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <circle cx="2.5" cy="7" r="1" fill="currentColor" />
-            <circle cx="7" cy="7" r="1" fill="currentColor" />
-            <circle cx="11.5" cy="7" r="1" fill="currentColor" />
+        {/* Dedicated drag handle. Lives outside `.eb2-head` ownership of the
+            press surface so its `touch-action: none` (see .eb2-grip in CSS)
+            keeps iOS Safari from claiming the touch for native scrolling
+            during the 350ms long-press window. */}
+        <div
+          className="eb2-grip"
+          role="button"
+          aria-label="Drag to reorder"
+          {...(dragHandleProps ?? {})}
+        >
+          <svg width="12" height="14" viewBox="0 0 12 14" fill="none" aria-hidden="true">
+            <circle cx="3.5" cy="3" r="1" fill="currentColor" />
+            <circle cx="3.5" cy="7" r="1" fill="currentColor" />
+            <circle cx="3.5" cy="11" r="1" fill="currentColor" />
+            <circle cx="8.5" cy="3" r="1" fill="currentColor" />
+            <circle cx="8.5" cy="7" r="1" fill="currentColor" />
+            <circle cx="8.5" cy="11" r="1" fill="currentColor" />
           </svg>
-        </button>
+        </div>
       </div>
 
       {(() => {
