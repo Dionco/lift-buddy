@@ -7,6 +7,19 @@ import { canditoHybridProgram } from '@/data/canditoHybridProgram';
 
 export type AdvanceCursorResult = Pick<NextCursorResult, 'blockBoundaryCrossed' | 'programComplete'>;
 
+/** Input shape accepted by store actions that create exercise logs. The store
+ *  assigns the per-log `id` internally — callers don't need to mint one. */
+export type ExerciseLogInput = Omit<ExerciseLog, 'id'>;
+
+let logIdCounter = 0;
+/** Stable per-log id. Combines time + monotonic counter so multiple logs
+ *  created within the same millisecond (e.g. when startSession spreads a
+ *  prescribed day) still get distinct ids. */
+function newLogId(): string {
+  logIdCounter += 1;
+  return `log-${Date.now().toString(36)}-${logIdCounter.toString(36)}`;
+}
+
 interface TrainingState {
   sessions: Session[];
   program: Program;
@@ -27,9 +40,9 @@ interface TrainingState {
    *  case where the prior Session never reached `sessions[]`. */
   lastReadiness: { readiness: ReadinessCheckIn; timestamp: number } | null;
 
-  startSession: (workoutName?: string, programDayId?: string, exercises?: ExerciseLog[]) => void;
+  startSession: (workoutName?: string, programDayId?: string, exercises?: ExerciseLogInput[]) => void;
   setReadiness: (readiness: ReadinessCheckIn) => void;
-  addExercise: (exerciseLog: ExerciseLog) => void;
+  addExercise: (exerciseLog: ExerciseLogInput) => void;
   logSet: (exerciseIndex: number, set: SetLog) => void;
   updateSet: (exerciseIndex: number, setIndex: number, set: Partial<SetLog>) => void;
   removeSet: (exerciseIndex: number, setIndex: number) => void;
@@ -235,6 +248,22 @@ function migrate(persistedState: unknown, version: number): TrainingState {
       state.sessions = state.sessions.filter((s) => s.id.startsWith('session-'));
     }
   }
+  if (version < 8) {
+    // v8: stable per-log id on ExerciseLog so React keys identify logs (not
+    // slots) during reorder. Backfill any persisted log that lacks one.
+    const stamp = (logs: { id?: string }[] | undefined) => {
+      if (!Array.isArray(logs)) return;
+      for (const log of logs) {
+        if (typeof log.id !== 'string' || log.id.length === 0) {
+          log.id = newLogId();
+        }
+      }
+    };
+    if (Array.isArray(state.sessions)) {
+      for (const s of state.sessions) stamp(s.exercises);
+    }
+    if (state.activeSession) stamp(state.activeSession.exercises);
+  }
   return state as TrainingState;
 }
 
@@ -250,10 +279,14 @@ export const useTrainingStore = create<TrainingState>()(
       lastReadiness: null,
 
       startSession: (workoutName, programDayId, exercises) => {
+        const stamped: ExerciseLog[] = (exercises ?? []).map((log) => ({
+          ...log,
+          id: newLogId(),
+        }));
         const session: Session = {
           id: `session-${Date.now()}`,
           startTime: Date.now(),
-          exercises: exercises || [],
+          exercises: stamped,
           workoutName,
           programDayId,
         };
@@ -277,7 +310,10 @@ export const useTrainingStore = create<TrainingState>()(
           set({
             activeSession: {
               ...activeSession,
-              exercises: [...activeSession.exercises, exerciseLog],
+              exercises: [
+                ...activeSession.exercises,
+                { ...exerciseLog, id: newLogId() },
+              ],
             },
           });
         }
@@ -424,7 +460,7 @@ export const useTrainingStore = create<TrainingState>()(
     }),
     {
       name: 'training-store',
-      version: 7,
+      version: 8,
       migrate: (persistedState, version) => migrate(persistedState, version),
     }
   )

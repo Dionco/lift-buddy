@@ -77,6 +77,11 @@ export interface SetLog {
 }
 
 export interface ExerciseLog {
+  /** Stable per-log identity, assigned on creation. Used as React key so DOM
+   *  nodes track logs across reorders rather than being reused by array slot.
+   *  Per-log (not per-exercise) because the same exercise can appear twice
+   *  in one day (e.g. ascending triples + back-off). */
+  id: string;
   exercise: Exercise;
   sets: SetLog[];
 }
