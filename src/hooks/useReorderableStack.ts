@@ -73,6 +73,12 @@ export function useReorderableStack(
     pointerId: number | null;
     autoscrollRaf: number | null;
     lastPointerY: number;
+    /** The drag-handle element that received pointerdown. We capture the
+     *  pointer onto this exact element so subsequent pointermove events keep
+     *  firing on the handler that owns onPointerMove — capturing on a
+     *  different node (e.g. the card root) would silently break the gesture
+     *  because pointer events don't bubble down to descendants. */
+    handleEl: HTMLDivElement | null;
   }>({
     phase: 'idle',
     sourceIndex: -1,
@@ -83,6 +89,7 @@ export function useReorderableStack(
     pointerId: null,
     autoscrollRaf: null,
     lastPointerY: 0,
+    handleEl: null,
   });
 
   // Renderable state: which card is dragging, current offset, and the
@@ -246,17 +253,22 @@ export function useReorderableStack(
             // Only primary button / primary touch.
             if (e.button !== undefined && e.button !== 0) return;
             if (drag.current.phase !== 'idle') return;
+            // Save the handle element NOW — React may null out e.currentTarget
+            // after the handler returns, and we need it inside setTimeout.
+            const handle = e.currentTarget;
             drag.current.phase = 'armed';
             drag.current.sourceIndex = index;
             drag.current.startY = e.clientY;
             drag.current.lastPointerY = e.clientY;
+            drag.current.handleEl = handle;
             drag.current.pressTimer = window.setTimeout(() => {
               drag.current.pressTimer = null;
               if (drag.current.phase !== 'armed') return;
-              // Capture the pointer onto the card root so subsequent moves
-              // route here even if the finger drifts off the header.
-              const card = cardRefs.current[index];
-              try { card?.setPointerCapture?.(e.pointerId); } catch { /* noop */ }
+              // Capture on the handle element itself so pointermove keeps
+              // firing here. Capturing on a different node (e.g. the card
+              // root) would route events away from this onPointerMove and
+              // freeze the drag.
+              try { handle?.setPointerCapture?.(e.pointerId); } catch { /* noop */ }
               activateDrag(index, e.pointerId);
             }, longPressMs);
           },
@@ -285,24 +297,28 @@ export function useReorderableStack(
             if (drag.current.phase === 'armed') {
               clearPress();
               drag.current.phase = 'idle';
+              drag.current.handleEl = null;
               return;
             }
             if (drag.current.phase !== 'dragging') return;
             try {
-              cardRefs.current[index]?.releasePointerCapture?.(e.pointerId);
+              drag.current.handleEl?.releasePointerCapture?.(e.pointerId);
             } catch { /* noop */ }
+            drag.current.handleEl = null;
             endDrag(true);
           },
           onPointerCancel: (e) => {
             if (drag.current.phase === 'armed') {
               clearPress();
               drag.current.phase = 'idle';
+              drag.current.handleEl = null;
               return;
             }
             if (drag.current.phase !== 'dragging') return;
             try {
-              cardRefs.current[index]?.releasePointerCapture?.(e.pointerId);
+              drag.current.handleEl?.releasePointerCapture?.(e.pointerId);
             } catch { /* noop */ }
+            drag.current.handleEl = null;
             endDrag(false);
           },
           onContextMenu: (e) => {
