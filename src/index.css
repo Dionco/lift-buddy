@@ -3269,6 +3269,26 @@
 }
 .eb2.is-main { border-left: 3px solid var(--ink); }
 .eb2.is-current { box-shadow: 0 0 0 1px var(--rule-2); border-color: var(--rule-2); }
+
+/* Reorder gesture states. See docs/superpowers/specs/2026-05-25-active-workout-reorder-design.md. */
+.eb2 {
+  /* `transform` is set inline during drag/displacement; this rule provides
+     the baseline transition for the displacement slide. */
+  transition: transform 180ms ease-out, opacity 120ms ease-out;
+  touch-action: pan-y;
+}
+.eb2.is-displaced {
+  /* explicit class kept for grep-ability; the transition lives on .eb2 above */
+}
+.eb2.is-dragging {
+  transform: scale(1.02) translateY(var(--drag-y, 0px));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+  z-index: 5;
+  transition: none; /* live drag — no easing, follow the finger */
+}
+.ses-stack.is-reordering .eb2:not(.is-dragging) {
+  opacity: 0.6;
+}
 .eb2-head {
   display: grid; grid-template-columns: 1fr auto auto; gap: 8px;
   align-items: center;
