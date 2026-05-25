@@ -921,8 +921,7 @@ export function ActiveWorkout({
       if (Number.isFinite(r) && r > 0) {
         const rest = suggestRest(r, ex);
         setRestSuggested(rest);
-        setRestRemaining(rest);
-        setRestRunning(false); // manual start
+        startRest(rest);
       }
     }
   };
@@ -1114,8 +1113,7 @@ export function ActiveWorkout({
     });
     const rest = suggestRest(parseInt(set.reps, 10), ex);
     setRestSuggested(rest);
-    setRestRemaining(rest);
-    setRestRunning(false);
+    startRest(rest);
     // Advance to next set within block, else first set of next block.
     const all = getAllInputs().filter((i) => i.field === 'weight');
     const idx = all.findIndex((i) => i.exId === active.exId && i.setId === active.setId);
@@ -1168,23 +1166,30 @@ export function ActiveWorkout({
     return () => cancelAnimationFrame(id);
   }, [active]);
 
-  // Manual rest timer.
-  const [restRemaining, setRestRemaining] = useState(0);
-  const [restRunning, setRestRunning] = useState(false);
+  // Rest timer — backed by the store via restEndsAt (see ADR-0014).
+  // restRemaining and restRunning are derived; the only local state is
+  // `restSuggested` (used to seed an idle-pill restart) and `now` (the
+  // 1Hz re-render driver for the countdown).
+  const restEndsAt = useTrainingStore((s) => s.restEndsAt);
+  const startRest = useTrainingStore((s) => s.startRest);
+  const endRest = useTrainingStore((s) => s.endRest);
   const [restSuggested, setRestSuggested] = useState(180);
+  const [now, setNow] = useState(() => Date.now());
+
   useEffect(() => {
-    if (!restRunning) return;
-    const t = setInterval(() => {
-      setRestRemaining((s) => {
-        if (s <= 1) {
-          setRestRunning(false);
-          return 0;
-        }
-        return s - 1;
-      });
-    }, 1000);
-    return () => clearInterval(t);
-  }, [restRunning]);
+    if (restEndsAt === null) return;
+    const tick = () => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= restEndsAt) endRest();
+    };
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [restEndsAt, endRest]);
+
+  const restRemaining =
+    restEndsAt === null ? 0 : Math.max(0, Math.ceil((restEndsAt - now) / 1000));
+  const restRunning = restEndsAt !== null && restEndsAt > now;
 
   // Drag-down gesture handlers — parent decides what the drag does.
   const dragState = useRef<{ active: boolean; startY: number }>({ active: false, startY: 0 });
@@ -1293,11 +1298,10 @@ export function ActiveWorkout({
           running={restRunning}
           suggested={restSuggested}
           onToggle={() => {
-            if (restRemaining === 0) {
-              setRestRemaining(restSuggested);
-              setRestRunning(true);
+            if (restEndsAt === null) {
+              startRest(restSuggested);
             } else {
-              setRestRunning((r) => !r);
+              endRest();
             }
           }}
         />
