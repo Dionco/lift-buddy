@@ -24,7 +24,6 @@ interface TrainingState {
   sessions: Session[];
   program: Program;
   activeSession: Session | null;
-  restTimerDuration: number; // seconds
   /** Three-lift Training Maxes that back loadPercentage-based prescriptions.
    *  Null until the lifter has entered them — UI must prompt before any program
    *  day with loadPercentage can compute weights. Cleared on restartProgram so
@@ -39,6 +38,11 @@ interface TrainingState {
    *  session-starts on the same calendar day — including the cancel-and-restart
    *  case where the prior Session never reached `sessions[]`. */
   lastReadiness: { readiness: ReadinessCheckIn; timestamp: number } | null;
+  /** Absolute unix-ms timestamp when the active rest period ends, or null when not resting.
+   *  `null` is the canonical "not resting" sentinel; any timestamp (past or future) means
+   *  startRest was the most recent transition. Cleared by endRest, finishSession,
+   *  cancelSession, and startSession. See ADR-0014. */
+  restEndsAt: number | null;
 
   startSession: (workoutName?: string, programDayId?: string, exercises?: ExerciseLogInput[]) => void;
   setReadiness: (readiness: ReadinessCheckIn) => void;
@@ -53,7 +57,12 @@ interface TrainingState {
   addSetToExercise: (exerciseIndex: number) => void;
   finishSession: (note?: string) => void;
   cancelSession: () => void;
-  setRestTimerDuration: (seconds: number) => void;
+  /** Start a rest period; sets restEndsAt = Date.now() + durationSeconds * 1000.
+   *  Idempotent — calling again overwrites the previous timestamp. */
+  startRest: (durationSeconds: number) => void;
+  /** Clear restEndsAt to null. Called by the in-component tick effect at expiry,
+   *  or by the lifter tapping the rest pill mid-rest to skip the remainder. */
+  endRest: () => void;
   setTrainingMaxes: (maxes: TrainingMaxes) => void;
   setLoadingIncrement: (increment: number) => void;
   /** Reset the program cursor to (0,0,0) and clear trainingMaxes so the next
@@ -139,7 +148,7 @@ function migrateExercise(legacy: LegacyExercise): Exercise {
  *  - 2: Exercise.muscleGroup (single) replaced by primaryMuscles[] + secondaryMuscles[]?.
  *    Walks every Exercise reachable from sessions and program and rewrites the shape.
  */
-function migrate(persistedState: unknown, version: number): TrainingState {
+export function migrate(persistedState: unknown, version: number): TrainingState {
   const state = persistedState as Partial<TrainingState> & { program?: unknown };
   if (version < 1 && state.program && typeof state.program === 'object') {
     const oldProgram = state.program as {
@@ -267,6 +276,19 @@ function migrate(persistedState: unknown, version: number): TrainingState {
     }
     if (state.activeSession) stamp(state.activeSession.exercises);
   }
+  if (version < 9) {
+    // v9: introduce `restEndsAt` per ADR-0014 (rest timer moves from
+    // ActiveWorkout's component-local state into the store so a future
+    // Live Activity bridge can observe it from a tree-root subscriber).
+    // Also drop the never-read `restTimerDuration` field — `suggestRest`
+    // is the actual per-rest duration source.
+    const s = state as TrainingState & {
+      restEndsAt?: unknown;
+      restTimerDuration?: unknown;
+    };
+    if (s.restEndsAt === undefined) s.restEndsAt = null;
+    delete s.restTimerDuration;
+  }
   return state as TrainingState;
 }
 
@@ -276,10 +298,10 @@ export const useTrainingStore = create<TrainingState>()(
       sessions: [],
       program: canditoHybridProgram,
       activeSession: null,
-      restTimerDuration: 120,
       trainingMaxes: null,
       loadingIncrement: 2.5,
       lastReadiness: null,
+      restEndsAt: null,
 
       startSession: (workoutName, programDayId, exercises) => {
         const stamped: ExerciseLog[] = (exercises ?? []).map((log) => ({
@@ -293,7 +315,7 @@ export const useTrainingStore = create<TrainingState>()(
           workoutName,
           programDayId,
         };
-        set({ activeSession: session });
+        set({ activeSession: session, restEndsAt: null });
       },
 
       setReadiness: (readiness) => {
@@ -419,12 +441,16 @@ export const useTrainingStore = create<TrainingState>()(
         set({
           sessions: [finished, ...sessions],
           activeSession: null,
+          restEndsAt: null,
         });
       },
 
-      cancelSession: () => set({ activeSession: null }),
+      cancelSession: () => set({ activeSession: null, restEndsAt: null }),
 
-      setRestTimerDuration: (seconds) => set({ restTimerDuration: seconds }),
+      startRest: (durationSeconds) =>
+        set({ restEndsAt: Date.now() + durationSeconds * 1000 }),
+
+      endRest: () => set({ restEndsAt: null }),
 
       setTrainingMaxes: (maxes) => set({ trainingMaxes: maxes }),
 
@@ -476,7 +502,7 @@ export const useTrainingStore = create<TrainingState>()(
     }),
     {
       name: 'training-store',
-      version: 8,
+      version: 9,
       migrate: (persistedState, version) => migrate(persistedState, version),
     }
   )

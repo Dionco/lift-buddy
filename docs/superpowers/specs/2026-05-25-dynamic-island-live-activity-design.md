@@ -136,8 +136,8 @@ Zustand mutation                    →  Plugin call         →  ActivityKit
 ─────────────────────────────────────────────────────────────────────────────
 startSession()                      →  start(attrs, state) →  Activity.request
 updateSet({completed: true})        →  update(state)       →  activity.update
-  (last set in exercise; phase=resting,
-   restEndsAt: now + restTimerDuration)
+  (set completed; phase=resting,
+   restEndsAt: now + suggestRest(reps, exercise) * 1000)
 [lifter starts next exercise]       →  update(state)       →  activity.update
   (phase=logging, new exerciseAbbrev)
 [rest timer hits 0 in JS]           →  update(state)       →  activity.update
