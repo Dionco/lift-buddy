@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { useTrainingStore } from '@/store/useTrainingStore';
+import { useTrainingStore, migrate } from '@/store/useTrainingStore';
 
 describe('rest timer store slice', () => {
   beforeEach(() => {
@@ -73,5 +73,49 @@ describe('rest timer cleared on session boundaries', () => {
     useTrainingStore.setState({ activeSession: null, restEndsAt: 9999999999999 });
     useTrainingStore.getState().startSession('Test workout');
     expect(useTrainingStore.getState().restEndsAt).toBeNull();
+  });
+});
+
+describe('v9 migration', () => {
+  it('defaults restEndsAt to null when migrating from v8', () => {
+    const v8State = {
+      sessions: [],
+      program: { id: 'p', name: 'P', blocks: [], currentBlockIndex: 0, currentWeekIndex: 0, currentDayIndex: 0 },
+      activeSession: null,
+      restTimerDuration: 120,
+      trainingMaxes: null,
+      loadingIncrement: 2.5,
+      lastReadiness: null,
+    };
+    const v9State = migrate(v8State, 8) as Record<string, unknown>;
+    expect(v9State.restEndsAt).toBeNull();
+  });
+
+  it('drops the dead restTimerDuration field when migrating from v8', () => {
+    const v8State = {
+      sessions: [],
+      program: { id: 'p', name: 'P', blocks: [], currentBlockIndex: 0, currentWeekIndex: 0, currentDayIndex: 0 },
+      activeSession: null,
+      restTimerDuration: 90,
+      trainingMaxes: null,
+      loadingIncrement: 2.5,
+      lastReadiness: null,
+    };
+    const v9State = migrate(v8State, 8) as Record<string, unknown>;
+    expect(v9State.restTimerDuration).toBeUndefined();
+  });
+
+  it('preserves a non-null restEndsAt that already exists (round-trip v9 → v9)', () => {
+    const v9In = {
+      sessions: [],
+      program: { id: 'p', name: 'P', blocks: [], currentBlockIndex: 0, currentWeekIndex: 0, currentDayIndex: 0 },
+      activeSession: null,
+      trainingMaxes: null,
+      loadingIncrement: 2.5,
+      lastReadiness: null,
+      restEndsAt: 1234567890,
+    };
+    const v9Out = migrate(v9In, 9) as Record<string, unknown>;
+    expect(v9Out.restEndsAt).toBe(1234567890);
   });
 });
