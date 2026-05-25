@@ -31,3 +31,4 @@ yarn.lock
 .agents/.worktrees/
 .agents/
 .vercel
+.superpowers/
