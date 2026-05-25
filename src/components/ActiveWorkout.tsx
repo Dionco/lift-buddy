@@ -18,6 +18,7 @@ import { calculatePrescribedWeight } from '@/lib/loadCalc';
 import { computeNumpadScrollDelta } from '@/lib/numpadScroll';
 import { AddExerciseSheet } from './AddExerciseSheet';
 import { Swipeable } from './Swipeable';
+import { useReorderableStack } from '@/hooks/useReorderableStack';
 
 // ─── Local UI shape ────────────────────────────────────────────────────────
 
@@ -567,6 +568,15 @@ interface ExerciseBlockProps {
   onApplyTarget: (setId: string) => void;
   onDeleteSet: (setId: string) => void;
   rowRefs: React.MutableRefObject<Record<string, HTMLDivElement | null>>;
+  /** Spread onto `.eb2-head` to enable long-press drag. */
+  dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
+  /** True for the currently-lifted card. */
+  isDragging?: boolean;
+  /** Px to translateY the whole card by (live drag offset for dragging card,
+   *  sibling displacement otherwise). */
+  displacement?: number;
+  /** Ref forwarded to the card root for rect measurement. */
+  cardRef?: (el: HTMLDivElement | null) => void;
 }
 
 function ExerciseBlock({
@@ -578,12 +588,29 @@ function ExerciseBlock({
   onApplyTarget,
   onDeleteSet,
   rowRefs,
+  dragHandleProps,
+  isDragging,
+  displacement = 0,
+  cardRef,
 }: ExerciseBlockProps) {
   const isCurrent = active?.exId === ex.exId;
 
+  const rootStyle: React.CSSProperties | undefined = isDragging
+    // Dragging: pass the live offset through a CSS variable so the `.is-dragging`
+    // rule's `scale(1.02) translateY(var(--drag-y))` keeps both transforms.
+    ? ({ ['--drag-y' as string]: `${displacement}px` } as React.CSSProperties)
+    // Displacement (sibling): plain translateY, animated by the .eb2 base rule.
+    : displacement !== 0
+      ? { transform: `translateY(${displacement}px)` }
+      : undefined;
+
   return (
-    <div className={`eb2 ${ex.isMainLift ? 'is-main' : ''} ${isCurrent ? 'is-current' : ''}`}>
-      <div className="eb2-head">
+    <div
+      ref={cardRef}
+      className={`eb2 ${ex.isMainLift ? 'is-main' : ''} ${isCurrent ? 'is-current' : ''} ${isDragging ? 'is-dragging' : ''} ${!isDragging && displacement !== 0 ? 'is-displaced' : ''}`}
+      style={rootStyle}
+    >
+      <div className="eb2-head" {...(dragHandleProps ?? {})}>
         <div className="eb2-head-l">
           <div className="eb2-eyebrow">
             {ex.isMainLift && <span className="tag">MAIN</span>}
@@ -768,12 +795,19 @@ export function ActiveWorkout({
   const addSetToStore = useTrainingStore((s) => s.addSetToExercise);
   const removeSetFromStore = useTrainingStore((s) => s.removeSet);
   const removeExerciseFromStore = useTrainingStore((s) => s.removeExercise);
+  const reorderExercisesInStore = useTrainingStore((s) => s.reorderExercises);
 
   const [exercises, setExercises] = useState<UIExercise[]>(() =>
     buildInitial(activeSession?.exercises, activeSession?.programDayId, program, sessions, trainingMaxes, loadingIncrement),
   );
   const [active, setActive] = useState<ActiveInput | null>(null);
   const [showAddExercise, setShowAddExercise] = useState(false);
+
+  const { stackRef: reorderStackRef, isReordering, getCardProps } = useReorderableStack({
+    itemCount: exercises.length,
+    onReorder: (from, to) => reorderExercisesInStore(from, to),
+    onDragStart: () => setActive(null),
+  });
 
   // Resync local state when the store's exercise list changes shape (add, remove,
   // or session change). Use a fingerprint of exercise ids so a delete-then-add
@@ -1103,6 +1137,10 @@ export function ActiveWorkout({
   // Auto-scroll active row into view above the numpad.
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const stackRef = useRef<HTMLDivElement>(null);
+  const setStackRef = useCallback((el: HTMLDivElement | null) => {
+    stackRef.current = el;
+    (reorderStackRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+  }, [reorderStackRef]);
   const numpadRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!active) return;
@@ -1266,11 +1304,12 @@ export function ActiveWorkout({
       </div>
 
       <div
-        className="ses-stack"
-        ref={stackRef}
+        className={`ses-stack ${isReordering ? 'is-reordering' : ''}`}
+        ref={setStackRef}
         style={{ paddingBottom: active ? 520 : 96 }}
       >
         {exercises.map((ex) => {
+          const cardProps = getCardProps(ex.exId);
           const block = (
             <ExerciseBlock
               ex={ex}
@@ -1280,6 +1319,10 @@ export function ActiveWorkout({
               onAddSet={() => handleAddSet(ex.exId)}
               onApplyTarget={(setId) => handleApplyTarget(ex.exId, setId)}
               onDeleteSet={(setId) => handleDeleteSet(ex.exId, setId)}
+              cardRef={cardProps.ref}
+              dragHandleProps={cardProps.dragHandleProps}
+              isDragging={cardProps.isDragging}
+              displacement={cardProps.displacement}
               rowRefs={rowRefs}
             />
           );
