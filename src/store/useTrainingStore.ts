@@ -39,6 +39,11 @@ interface TrainingState {
    *  session-starts on the same calendar day — including the cancel-and-restart
    *  case where the prior Session never reached `sessions[]`. */
   lastReadiness: { readiness: ReadinessCheckIn; timestamp: number } | null;
+  /** Absolute unix-ms timestamp when the active rest period ends, or null when not resting.
+   *  `null` is the canonical "not resting" sentinel; any timestamp (past or future) means
+   *  startRest was the most recent transition. Cleared by endRest, finishSession,
+   *  cancelSession, and startSession. See ADR-0014. */
+  restEndsAt: number | null;
 
   startSession: (workoutName?: string, programDayId?: string, exercises?: ExerciseLogInput[]) => void;
   setReadiness: (readiness: ReadinessCheckIn) => void;
@@ -54,6 +59,12 @@ interface TrainingState {
   finishSession: (note?: string) => void;
   cancelSession: () => void;
   setRestTimerDuration: (seconds: number) => void;
+  /** Start a rest period; sets restEndsAt = Date.now() + durationSeconds * 1000.
+   *  Idempotent — calling again overwrites the previous timestamp. */
+  startRest: (durationSeconds: number) => void;
+  /** Clear restEndsAt to null. Called by the in-component tick effect at expiry,
+   *  or by the lifter tapping the rest pill mid-rest to skip the remainder. */
+  endRest: () => void;
   setTrainingMaxes: (maxes: TrainingMaxes) => void;
   setLoadingIncrement: (increment: number) => void;
   /** Reset the program cursor to (0,0,0) and clear trainingMaxes so the next
@@ -280,6 +291,7 @@ export const useTrainingStore = create<TrainingState>()(
       trainingMaxes: null,
       loadingIncrement: 2.5,
       lastReadiness: null,
+      restEndsAt: null,
 
       startSession: (workoutName, programDayId, exercises) => {
         const stamped: ExerciseLog[] = (exercises ?? []).map((log) => ({
@@ -425,6 +437,11 @@ export const useTrainingStore = create<TrainingState>()(
       cancelSession: () => set({ activeSession: null }),
 
       setRestTimerDuration: (seconds) => set({ restTimerDuration: seconds }),
+
+      startRest: (durationSeconds) =>
+        set({ restEndsAt: Date.now() + durationSeconds * 1000 }),
+
+      endRest: () => set({ restEndsAt: null }),
 
       setTrainingMaxes: (maxes) => set({ trainingMaxes: maxes }),
 
