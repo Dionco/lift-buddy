@@ -31,6 +31,10 @@ interface UISet {
 }
 
 interface UIExercise {
+  /** Log id from `ExerciseLog.id`. Used as the React key for the exercise
+   *  map so DOM nodes follow logs across reorders rather than being reused
+   *  by array slot (essential for the drag visual to look correct). */
+  uiKey: string;
   exId: number;
   exerciseId: string;
   name: string;
@@ -109,6 +113,7 @@ function buildInitial(
     // set (Double Progression).
     const useTopAnchor = isMain || !!log.exercise.relatedTo;
     return {
+      uiKey: log.id,
       exId,
       exerciseId: log.exercise.id,
       name: log.exercise.name,
@@ -775,11 +780,11 @@ export function ActiveWorkout({
   // of equal count still triggers a rebuild.
   const sessionIdRef = useRef(activeSession?.id);
   const exerciseFingerprintRef = useRef(
-    activeSession?.exercises.map((e) => e.exercise.id).join('|') ?? '',
+    activeSession?.exercises.map((e) => e.id).join('|') ?? '',
   );
   useEffect(() => {
     if (!activeSession) return;
-    const fingerprint = activeSession.exercises.map((e) => e.exercise.id).join('|');
+    const fingerprint = activeSession.exercises.map((e) => e.id).join('|');
     const sessionChanged = sessionIdRef.current !== activeSession.id;
     const exercisesChanged = exerciseFingerprintRef.current !== fingerprint;
     if (sessionChanged || exercisesChanged) {
@@ -1295,7 +1300,7 @@ export function ActiveWorkout({
             : () => handleDeleteExercise(ex.exId);
           return (
             <Swipeable
-              key={ex.exId}
+              key={ex.uiKey}
               onDelete={onDelete}
               className="xb-swipe-shell"
               revealWidth={96}
