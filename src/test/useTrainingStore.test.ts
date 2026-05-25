@@ -146,3 +146,71 @@ describe('ExerciseLog.id (stable per-log identity)', () => {
     expect(new Set(allIds).size).toBe(allIds.length); // all unique
   });
 });
+
+describe('reorderExercises', () => {
+  function setupThree() {
+    useTrainingStore.getState().startSession('Test', 'day-1', [
+      { exercise: squat, sets: [placeholder()] },
+      { exercise: legPress, sets: [placeholder()] },
+      { exercise: squat, sets: [placeholder()] },
+    ]);
+    return useTrainingStore.getState().activeSession!.exercises.map((l) => l.id);
+  }
+
+  it('moves first to last', () => {
+    const [idA, idB, idC] = setupThree();
+    useTrainingStore.getState().reorderExercises(0, 2);
+    const after = useTrainingStore.getState().activeSession!.exercises.map((l) => l.id);
+    expect(after).toEqual([idB, idC, idA]);
+  });
+
+  it('moves last to first', () => {
+    const [idA, idB, idC] = setupThree();
+    useTrainingStore.getState().reorderExercises(2, 0);
+    const after = useTrainingStore.getState().activeSession!.exercises.map((l) => l.id);
+    expect(after).toEqual([idC, idA, idB]);
+  });
+
+  it('moves middle to adjacent', () => {
+    const [idA, idB, idC] = setupThree();
+    useTrainingStore.getState().reorderExercises(1, 2);
+    const after = useTrainingStore.getState().activeSession!.exercises.map((l) => l.id);
+    expect(after).toEqual([idA, idC, idB]);
+  });
+
+  it('is a no-op when from === to', () => {
+    const before = setupThree();
+    useTrainingStore.getState().reorderExercises(1, 1);
+    const after = useTrainingStore.getState().activeSession!.exercises.map((l) => l.id);
+    expect(after).toEqual(before);
+  });
+
+  it('is a no-op when either index is out of range', () => {
+    const before = setupThree();
+    useTrainingStore.getState().reorderExercises(-1, 2);
+    expect(useTrainingStore.getState().activeSession!.exercises.map((l) => l.id)).toEqual(before);
+    useTrainingStore.getState().reorderExercises(0, 99);
+    expect(useTrainingStore.getState().activeSession!.exercises.map((l) => l.id)).toEqual(before);
+  });
+
+  it('is a no-op when there is no active session', () => {
+    useTrainingStore.setState({ activeSession: null });
+    useTrainingStore.getState().reorderExercises(0, 1);
+    expect(useTrainingStore.getState().activeSession).toBeNull();
+  });
+
+  it('order persists through finishSession', () => {
+    const [idA, idB, idC] = setupThree();
+    // Mark all sets done so the logs aren't dropped by ADR-0005 normalisation.
+    const exercises = useTrainingStore.getState().activeSession!.exercises;
+    exercises.forEach((_, exIdx) => {
+      useTrainingStore.getState().updateSet(exIdx, 0, {
+        weight: 100, reps: 5, rpe: 8, completed: true, timestamp: Date.now(),
+      });
+    });
+    useTrainingStore.getState().reorderExercises(0, 2);
+    useTrainingStore.getState().finishSession();
+    const saved = useTrainingStore.getState().sessions[0];
+    expect(saved.exercises.map((l) => l.id)).toEqual([idB, idC, idA]);
+  });
+});

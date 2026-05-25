@@ -47,6 +47,9 @@ interface TrainingState {
   updateSet: (exerciseIndex: number, setIndex: number, set: Partial<SetLog>) => void;
   removeSet: (exerciseIndex: number, setIndex: number) => void;
   removeExercise: (exerciseIndex: number) => void;
+  /** Move an exercise within the active session. No-op if from === to,
+   *  either index is out of range, or there is no active session. */
+  reorderExercises: (fromIndex: number, toIndex: number) => void;
   addSetToExercise: (exerciseIndex: number) => void;
   finishSession: (note?: string) => void;
   cancelSession: () => void;
@@ -356,6 +359,19 @@ export const useTrainingStore = create<TrainingState>()(
         if (!activeSession) return;
         const exercises = activeSession.exercises.filter((_, i) => i !== exerciseIndex);
         set({ activeSession: { ...activeSession, exercises } });
+      },
+
+      reorderExercises: (fromIndex, toIndex) => {
+        const { activeSession } = get();
+        if (!activeSession) return;
+        if (fromIndex === toIndex) return;
+        const len = activeSession.exercises.length;
+        if (fromIndex < 0 || fromIndex >= len) return;
+        if (toIndex < 0 || toIndex >= len) return;
+        const next = activeSession.exercises.slice();
+        const [moved] = next.splice(fromIndex, 1);
+        next.splice(toIndex, 0, moved);
+        set({ activeSession: { ...activeSession, exercises: next } });
       },
 
       addSetToExercise: (exerciseIndex) => {
