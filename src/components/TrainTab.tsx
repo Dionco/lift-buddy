@@ -3,12 +3,10 @@ import { useTrainingStore } from '@/store/useTrainingStore';
 import {
   ExerciseLog,
   ProgramExercise,
-  Session,
   SetLog,
   TrainingMaxes,
 } from '@/types/training';
 import { CANDITO_REP_MULTIPLIERS } from '@/lib/canditoMultipliers';
-import { lastTopSet } from '@/lib/e1rm';
 import { fatigueSignal, type FatigueSignal } from '@/lib/progressSignal';
 import { formatMuscles } from '@/lib/muscleLabels';
 import { calculatePrescribedWeight, programRequiresTrainingMaxes } from '@/lib/loadCalc';
@@ -201,7 +199,6 @@ export function TrainTab({
               <DocketRow
                 key={`${pe.exercise.id}-${i}`}
                 pe={pe}
-                sessions={sessions}
                 index={i}
                 isMain
                 trainingMaxes={trainingMaxes}
@@ -221,7 +218,6 @@ export function TrainTab({
               <DocketRow
                 key={`${pe.exercise.id}-${mainLifts.length + i}`}
                 pe={pe}
-                sessions={sessions}
                 index={mainLifts.length + i}
                 isMain={false}
                 trainingMaxes={trainingMaxes}
@@ -247,18 +243,19 @@ export function TrainTab({
 
 interface DocketRowProps {
   pe: ProgramExercise;
-  sessions: Session[];
   index: number;
   isMain: boolean;
   trainingMaxes: TrainingMaxes | null;
   loadingIncrement: number;
 }
 
-// Default docket variant: stacked plate bars (one per prescribed set), with the
-// last top-set weight pinned to the right of main lifts.
-function DocketRow({ pe, sessions, index, isMain, trainingMaxes, loadingIncrement }: DocketRowProps) {
+// Default docket variant: stacked plate bars (one per prescribed set) plus the
+// prescribed weight chip. Previous top-set history is intentionally **not**
+// rendered here — a "TOP 119.5kg" pinned next to today's prescribed 116.25kg
+// reads as "today's target", which it isn't. The lifter sees their previous
+// top set on the workout screen ("LAST TOP …") once they actually start.
+function DocketRow({ pe, index, isMain, trainingMaxes, loadingIncrement }: DocketRowProps) {
   const setBars = Array.from({ length: pe.prescription.sets });
-  const last = isMain ? lastTopSet(sessions, pe.exercise.id) : null;
   const prescribedWeight = calculatePrescribedWeight(
     pe.prescription,
     pe.exercise,
@@ -310,15 +307,6 @@ function DocketRow({ pe, sessions, index, isMain, trainingMaxes, loadingIncremen
               </span>
             )}
           </span>
-          {isMain && last && (
-            <span className="dr-plates-top">
-              <span className="dr-plates-top-label">top</span>
-              <span className="dr-plates-top-val">
-                {last.weight}
-                <span className="dr-plates-top-unit">kg</span>
-              </span>
-            </span>
-          )}
         </div>
       </div>
     </div>
