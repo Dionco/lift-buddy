@@ -63,6 +63,8 @@ export interface Exercise {
   secondaryMuscles?: MuscleGroup[];
   isMainLift: boolean;
   relatedTo?: MainLift;
+  /** Optional illustrative image URL (from free-exercise-db, Unlicense). */
+  imageUrl?: string;
 }
 
 export interface SetLog {

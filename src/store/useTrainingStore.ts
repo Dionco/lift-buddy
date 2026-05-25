@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Session, Program, ExerciseLog, SetLog, ReadinessCheckIn, ProgramBlock, Exercise, MuscleGroup, TrainingMaxes } from '@/types/training';
 import { computeNextCursor, NextCursorResult } from '@/lib/programCursor';
-import { EXERCISES } from '@/data/sampleProgram';
+import { EXERCISES } from '@/data/exerciseLibrary';
 import { canditoHybridProgram } from '@/data/canditoHybridProgram';
 
 export type AdvanceCursorResult = Pick<NextCursorResult, 'blockBoundaryCrossed' | 'programComplete'>;

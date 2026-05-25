@@ -1,5 +1,5 @@
 import { Program, ProgramBlock, ProgramDay, ProgramExercise } from '@/types/training';
-import { EXERCISES } from './sampleProgram';
+import { EXERCISES } from './exerciseLibrary';
 
 /**
  * Candito-Hybrid 6-week powerlifting block.

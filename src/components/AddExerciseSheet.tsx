@@ -1,7 +1,7 @@
 // src/components/AddExerciseSheet.tsx
 import { useState, useMemo, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { EXERCISES } from "@/data/sampleProgram";
+import { EXERCISES } from "@/data/exerciseLibrary";
 import { Exercise, MuscleGroup, MuscleRegion, MUSCLE_REGION, MUSCLE_REGION_ORDER, Session } from "@/types/training";
 import { formatMuscles } from "@/lib/muscleLabels";
 
