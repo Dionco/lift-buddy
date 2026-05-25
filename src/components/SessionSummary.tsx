@@ -262,9 +262,8 @@ export function SessionSummary({ session, onClose, onProgramComplete }: SessionS
       ) : (
         <div className="flex flex-col gap-2">
           <button
-            onClick={closeAndAdvance}
+            onClick={session.programDayId ? closeAndAdvance : closeWithoutAdvance}
             className="min-h-[52px] w-full rounded-xl bg-primary font-semibold text-primary-foreground active:scale-[0.98] transition-transform"
-            disabled={!session.programDayId}
           >
             {session.programDayId ? 'Mark complete & advance program' : 'Save & close'}
           </button>
