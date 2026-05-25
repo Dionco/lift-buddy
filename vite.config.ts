@@ -16,7 +16,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     mode === "development" && componentTagger(),
-    VitePWA({
+    mode !== "capacitor" && VitePWA({
       registerType: "autoUpdate",
       includeAssets: [
         "favicon.ico",
