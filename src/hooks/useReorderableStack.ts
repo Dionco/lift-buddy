@@ -28,6 +28,7 @@ interface CardProps {
     onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => void;
     onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => void;
     onPointerCancel: (e: React.PointerEvent<HTMLDivElement>) => void;
+    onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => void;
   };
   /** True for the card currently lifted. */
   isDragging: boolean;
@@ -303,6 +304,12 @@ export function useReorderableStack(
               cardRefs.current[index]?.releasePointerCapture?.(e.pointerId);
             } catch { /* noop */ }
             endDrag(false);
+          },
+          onContextMenu: (e) => {
+            // Suppress the native long-press / right-click menu so it doesn't
+            // race the 350ms drag activation on Android, or pop up over the
+            // dragged card on desktop.
+            e.preventDefault();
           },
         },
         isDragging,

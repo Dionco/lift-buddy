@@ -3285,14 +3285,30 @@
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
   z-index: 5;
   transition: none; /* live drag — no easing, follow the finger */
+  /* Once a drag is active, the card owns the pointer end-to-end — no scroll
+     fight from the browser interpreting vertical motion. */
+  touch-action: none;
 }
 .ses-stack.is-reordering .eb2:not(.is-dragging) {
   opacity: 0.6;
+}
+/* While ANY reorder is in flight, suppress text selection across the stack so
+   strays selections that started before the long-press fired can't linger. */
+.ses-stack.is-reordering {
+  -webkit-user-select: none;
+  user-select: none;
 }
 .eb2-head {
   display: grid; grid-template-columns: 1fr auto auto; gap: 8px;
   align-items: center;
   padding: 10px 12px 4px;
+  /* Drag handle for the long-press reorder gesture: suppress the OS-native
+     long-press text-selection / magnifier / context-menu so our 350ms timer
+     can claim the press instead of iOS Safari's selection callout. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .eb2-head-l { min-width: 0; }
 .eb2-eyebrow {
