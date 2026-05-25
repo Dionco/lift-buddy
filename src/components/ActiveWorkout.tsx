@@ -15,6 +15,7 @@ import {
   type AccessorySuggestion,
 } from '@/lib/progressSignal';
 import { calculatePrescribedWeight } from '@/lib/loadCalc';
+import { computeNumpadScrollDelta } from '@/lib/numpadScroll';
 import { AddExerciseSheet } from './AddExerciseSheet';
 import { Swipeable } from './Swipeable';
 
@@ -1110,14 +1111,15 @@ export function ActiveWorkout({
       const npEl = numpadRef.current;
       const numpadOpen = npEl?.classList.contains('is-visible');
       const numpadHeight = numpadOpen ? npEl?.offsetHeight ?? 480 : 0;
-      const headroom = 56;
-      const buffer = 20;
-      const visibleTop = stackRect.top + headroom;
-      const visibleBottom = stackRect.bottom - numpadHeight - buffer;
-      if (rowRect.top < visibleTop) {
-        stack.scrollBy({ top: rowRect.top - visibleTop, behavior: 'smooth' });
-      } else if (rowRect.bottom > visibleBottom) {
-        stack.scrollBy({ top: rowRect.bottom - visibleBottom, behavior: 'smooth' });
+      const delta = computeNumpadScrollDelta({
+        stackTop: stackRect.top,
+        stackBottom: stackRect.bottom,
+        rowTop: rowRect.top,
+        rowBottom: rowRect.bottom,
+        numpadHeight,
+      });
+      if (delta !== 0) {
+        stack.scrollBy({ top: delta, behavior: 'smooth' });
       }
     });
     return () => cancelAnimationFrame(id);
