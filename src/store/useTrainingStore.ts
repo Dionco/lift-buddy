@@ -4,7 +4,6 @@ import { Session, Program, ExerciseLog, SetLog, ReadinessCheckIn, ProgramBlock, 
 import { computeNextCursor, NextCursorResult } from '@/lib/programCursor';
 import { EXERCISES } from '@/data/sampleProgram';
 import { canditoHybridProgram } from '@/data/canditoHybridProgram';
-import { sampleSessions } from '@/data/sampleSessions';
 
 export type AdvanceCursorResult = Pick<NextCursorResult, 'blockBoundaryCrossed' | 'programComplete'>;
 
@@ -183,14 +182,8 @@ function migrate(persistedState: unknown, version: number): TrainingState {
     }
   }
   if (version < 3) {
-    // v3: refresh seed/demo sessions with the new generated dataset. Real
-    // user-logged sessions (id starts with "session-", produced by
-    // startSession) are preserved untouched. Old hand-curated sample sessions
-    // (s1..s5) and prior generated sets (gen-*) are replaced by the new
-    // generator output so the Progress tab has rich demo data.
-    const isUserLogged = (id: string) => id.startsWith('session-');
-    const userSessions = (state.sessions ?? []).filter((s) => isUserLogged(s.id));
-    state.sessions = [...sampleSessions, ...userSessions];
+    // No-op: v3 used to refresh demo seed sessions, but seeds are gone (v7
+    // strips them). Kept as a numbered slot so the version sequence is dense.
   }
   if (version < 4) {
     // v4: enforce the newest-first Session-order convention. `finishSession`
@@ -233,16 +226,22 @@ function migrate(persistedState: unknown, version: number): TrainingState {
     const s = state as TrainingState & { lastReadiness?: unknown };
     if (s.lastReadiness === undefined) s.lastReadiness = null;
   }
+  if (version < 7) {
+    // v7: strip seeded/demo sessions so the app starts empty for real use.
+    // Only user-logged sessions (id starts with "session-", produced by
+    // startSession) are kept; everything else (legacy s1..s5, gen-*, generator
+    // output from older v3 migrations) is dropped.
+    if (Array.isArray(state.sessions)) {
+      state.sessions = state.sessions.filter((s) => s.id.startsWith('session-'));
+    }
+  }
   return state as TrainingState;
 }
 
 export const useTrainingStore = create<TrainingState>()(
   persist(
     (set, get) => ({
-      // Newest-first — the Session-order convention `finishSession` (prepend)
-      // and every order-sensitive lib function rely on. `sampleSessions` is
-      // generated oldest-first, so reverse it here.
-      sessions: [...sampleSessions].reverse(),
+      sessions: [],
       program: canditoHybridProgram,
       activeSession: null,
       restTimerDuration: 120,
@@ -425,7 +424,7 @@ export const useTrainingStore = create<TrainingState>()(
     }),
     {
       name: 'training-store',
-      version: 6,
+      version: 7,
       migrate: (persistedState, version) => migrate(persistedState, version),
     }
   )
